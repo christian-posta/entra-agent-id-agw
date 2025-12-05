@@ -6,7 +6,6 @@ See [creating a blueprint](./BLUEPRINT-CREATION-POWERSHELL.md)
 
 
 
-
 ## Set up powershell
 ```bash
 brew install powershell/tap/powershell
@@ -34,3 +33,13 @@ Write-Host "Your User ID: $myUserId"
 
 ```
 
+# Deploy to Kubernetes
+
+Copy env.example to .env (and fill in proper variables)
+Then go deploy to k8s with envsub:
+
+```bash
+cp env.example .env
+cd kubernetes
+./deploy.sh
+```

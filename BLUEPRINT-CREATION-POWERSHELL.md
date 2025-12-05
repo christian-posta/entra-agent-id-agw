@@ -135,6 +135,44 @@ $blueprintToken = $tokenResponse.access_token
 Write-Host "✅ Got blueprint access token (length: $($blueprintToken.Length))"
 ```
 
+Here's what the token looks like:
+
+```json
+{
+  "aud": "https://graph.microsoft.com",
+  "iss": "https://sts.windows.net/<tenant-id-here>/",
+  "iat": 1764881919,
+  "nbf": 1764881919,
+  "exp": 1764885819,
+  "aio": "k2JgYNiYOzvStP+9vMX5knMPWjnLAA==",
+  "app_displayname": "My Agent Identity Blueprint",
+  "appid": "<blueprint-client-id-here>",
+  "appidacr": "1",
+  "idp": "https://sts.windows.net/<tenant-id-here>/",
+  "idtyp": "app",
+  "oid": "241316bd-a01d-411a-b8bc-39ff7a9ef8da",
+  "rh": "1.AXgAZoF9XnZ4VUehpLR21KNE9gMAAAAAAAAAwAAAAAAAAAB4AAB4AA.",
+  "roles": [
+    "AgentIdentity.CreateAsManager"
+  ],
+  "sub": "241316bd-a01d-411a-b8bc-39ff7a9ef8da",
+  "tenant_region_scope": "NA",
+  "tid": "<tenant-id-here>",
+  "uti": "8hpd54jqCEueln0eWkgWAA",
+  "ver": "1.0",
+  "wids": [
+    "0997a1d0-0d1d-4acb-b408-d5ca73121e90"
+  ],
+  "xms_acd": 1764880353,
+  "xms_act_fct": "9 3",
+  "xms_ftd": "vvWYl9xd63PnrWG1YtjLvClWg1IYRfP7c5Jt96Xu6SIBdXNlYXN0LWRzbXM",
+  "xms_idrel": "7 6",
+  "xms_rd": "0.42LlYBJirBAS4WAXEtgpkil0m2md96SyRUYa3-PvAUU5hQTOextEiVqcc1m_tM_Y8bGfClCUQ0iAmQECDkBpAA",
+  "xms_sub_fct": "9 3",
+  "xms_tcdt": 1657299251,
+  "xms_tnt_fct": "2 3"
+}
+```
 
 Create the agent identity:
 
