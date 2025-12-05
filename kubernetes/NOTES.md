@@ -4,6 +4,13 @@ Get the blueprint's access token:
 curl -v localhost:5000/AuthorizationHeaderUnauthenticated/graph
 ```
 
+Once this is fixed, this will work:
+https://github.com/AzureAD/microsoft-identity-web/issues/3643
+
+```bash
+curl -v "localhost:5000/AuthorizationHeaderUnauthenticated/graph?optionsOverride.RequestAppToken=true"
+```
+
 Get the token for the agent's identity:
 ```bash
 curl -v "localhost:5000/AuthorizationHeaderUnauthenticated/graph?AgentIdentity=58326923-8cbc-4ef2-a30b-9c2a9684dbb1"

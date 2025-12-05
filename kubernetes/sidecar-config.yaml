@@ -4,8 +4,6 @@ metadata:
   name: sidecar-config
   namespace: entra-demo
 data:
-  # Default to App Tokens at the moment
-  DownstreamApis__graph__RequestAppToken: "true"
 
   # Azure AD / Entra configuration
   AzureAd__Instance: "https://login.microsoftonline.com/"
