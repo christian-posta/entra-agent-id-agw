@@ -13,6 +13,10 @@ from .auth import (
     get_device_code_token,
     get_client_credentials_token,
     get_agent_identity_token,
+    clear_token_cache,
+    get_cached_accounts,
+    READ_ONLY_SCOPES,
+    TOKEN_CACHE_PATH,
 )
 from .config import get_config
 from .graph_client import (
@@ -54,6 +58,7 @@ def display_token_claims(token_name: str, claims: dict) -> None:
 def list_blueprints(
     tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
     from_graph: bool = typer.Option(False, "--from-graph", "-g", help="Fetch from Graph API (requires auth)"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication (ignore cached token)"),
 ) -> None:
     """List all Agent Identity Blueprints.
     
@@ -67,7 +72,7 @@ def list_blueprints(
         tid = require_tenant_id(tenant_id)
         console.print("[bold blue]Authenticating to fetch blueprints from Graph API...[/bold blue]")
         
-        token = get_device_code_token(tid)
+        token = get_device_code_token(tid, scopes=READ_ONLY_SCOPES, force_refresh=force_refresh)
         if not token:
             raise typer.Exit(1)
         
@@ -129,11 +134,12 @@ def create_new_blueprint(
     name: str = typer.Argument(..., help="Display name for the blueprint"),
     tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
     save: bool = typer.Option(True, "--save/--no-save", help="Save blueprint to local config"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication (ignore cached token)"),
 ) -> None:
     """Create a new Agent Identity Blueprint.
     
     This will:
-    1. Authenticate using device code flow
+    1. Authenticate using device code flow (or use cached token)
     2. Create the blueprint application
     3. Create the blueprint service principal
     4. Generate a client secret
@@ -152,7 +158,7 @@ def create_new_blueprint(
     
     # Authenticate
     console.print("[bold blue]Step 1: Authenticate with device code flow[/bold blue]")
-    token = get_device_code_token(tid)
+    token = get_device_code_token(tid, force_refresh=force_refresh)
     if not token:
         raise typer.Exit(1)
     
@@ -185,6 +191,7 @@ def create_new_blueprint(
 def list_agent_identities(
     tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
     from_graph: bool = typer.Option(False, "--from-graph", "-g", help="Fetch from Graph API (requires auth)"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication (ignore cached token)"),
 ) -> None:
     """List all Agent Identities.
     
@@ -197,7 +204,7 @@ def list_agent_identities(
         tid = require_tenant_id(tenant_id)
         console.print("[bold blue]Authenticating to fetch agent identities from Graph API...[/bold blue]")
         
-        token = get_device_code_token(tid)
+        token = get_device_code_token(tid, scopes=READ_ONLY_SCOPES, force_refresh=force_refresh)
         if not token:
             raise typer.Exit(1)
         
@@ -390,6 +397,7 @@ def get_access_token(
 @app.command("config")
 def show_config(
     path: bool = typer.Option(False, "--path", "-p", help="Show config file path only"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID (for showing cached accounts)"),
 ) -> None:
     """Show current configuration."""
     config = get_config()
@@ -399,10 +407,55 @@ def show_config(
         return
     
     console.print(f"[bold]Config file:[/bold] {config.config_path}")
+    console.print(f"[bold]Token cache:[/bold] {TOKEN_CACHE_PATH}")
     console.print(f"[bold]Tenant ID:[/bold] {config.tenant_id or '[dim]Not set[/dim]'}")
     console.print(f"[bold]Default Blueprint:[/bold] {config.default_blueprint_name or '[dim]Not set[/dim]'}")
     console.print(f"\n[bold]Stored Blueprints:[/bold] {len(config.list_blueprints())}")
     console.print(f"[bold]Stored Agent Identities:[/bold] {len(config.list_agent_identities())}")
+    
+    # Show cached accounts if tenant ID is available
+    tid = tenant_id or config.tenant_id
+    if tid:
+        accounts = get_cached_accounts(tid)
+        if accounts:
+            console.print(f"\n[bold]Cached Accounts ({len(accounts)}):[/bold]")
+            for account in accounts:
+                console.print(f"  - {account.get('username', 'unknown')}")
+        else:
+            console.print(f"\n[bold]Cached Accounts:[/bold] [dim]None[/dim]")
+
+
+@app.command("logout")
+def logout() -> None:
+    """Clear cached authentication tokens.
+    
+    This removes all cached tokens, forcing re-authentication
+    on the next command that requires it.
+    """
+    console.print("[bold blue]Clearing token cache...[/bold blue]")
+    clear_token_cache()
+    console.print("[green]✓ Logged out successfully[/green]")
+
+
+@app.command("login")
+def login(
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication (ignore cached token)"),
+) -> None:
+    """Authenticate and cache tokens for future use.
+    
+    This pre-authenticates so subsequent commands don't require login.
+    """
+    tid = require_tenant_id(tenant_id)
+    
+    console.print("[bold blue]Authenticating...[/bold blue]")
+    token = get_device_code_token(tid, force_refresh=force_refresh)
+    
+    if token:
+        console.print("[green]✓ Authentication successful, token cached for future use[/green]")
+    else:
+        console.print("[red]Authentication failed[/red]")
+        raise typer.Exit(1)
 
 
 def main() -> None:
@@ -412,4 +465,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
