@@ -21,7 +21,8 @@ Install-Module Microsoft.Graph -Scope CurrentUser -Repository PSGallery -Force
 
 ```bash
 # Connect with more priv
-Connect-MgGraph -Scopes "RoleManagement.ReadWrite.Directory"
+Connect-MgGraph -Scopes "RoleManagement.ReadWrite.Directory","Directory.ReadWrite.All","AgentIdentityBlueprint.ReadWrite.All"
+
 
 # Check that you're connected and have the right permissions
 Get-MgContext
