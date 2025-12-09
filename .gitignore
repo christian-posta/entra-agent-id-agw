@@ -1,2 +1,4 @@
 .env
 _session*
+variables.ps1
+.DS_Store
