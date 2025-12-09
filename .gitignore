@@ -2,3 +2,5 @@
 _session*
 variables.ps1
 .DS_Store
+.venv
+__pycache__
