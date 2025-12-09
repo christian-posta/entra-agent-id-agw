@@ -214,6 +214,62 @@ Write-Host "✅ Got resource token (T2) - length: $($resourceToken.Length)"
 Write-Host "✅ Got refresh token - length: $($refreshToken.Length)"
 ```
 
+Example OBO token:
+
+```json
+{
+  "aud": "https://graph.microsoft.com",
+  "iss": "https://sts.windows.net/<tenant-id>/",
+  "iat": 1765306890,
+  "nbf": 1765306890,
+  "exp": 1765311301,
+  "acct": 0,
+  "acr": "1",
+  "acrs": [
+    "p1"
+  ],
+  "aio": "AZQAa/8aAAAA2cHfeXqdSrcR5t0dkpG7aY9jGR+Mj+kagdvUVhQp7Hb2FkJwZEsb6pvl1890ikA4OTf5u9m9vi/x6b+SD+jW7T+jWGzyXLMZq1jsz9xsYTsIP8476ht7gDKejoD3pVJ+BuPD9wj+Jgx890eaFRc4W5fticXPTjOapHDe/4cCH11/v131zdS3Mfa8ctXsL2M6",
+  "amr": [
+    "pwd",
+    "mfa"
+  ],
+  "app_displayname": "My Test Agent",
+  "appid": "<agent-identity-id>",
+  "appidacr": "2",
+  "idtyp": "user",
+  "ipaddr": "72.208.175.26",
+  "name": "Christian Posta",
+  "oid": "<user-id>",
+  "platf": "5",
+  "puid": "100320054BABC41C",
+  "rh": "1.AXgAZoF9XnZ4VUehpLR21KNE9gMAAAAAAAAAwAAAAAAAAAB4ALt4AA.",
+  "scp": "openid profile User.Read email",
+  "sid": "00b79819-e0b7-43f7-5402-99bb2eeec2ab",
+  "sub": "93m3ed3gY2h-GzDAQ0wyVuqRu1hLfBsDDXdealS9RLQ",
+  "tenant_region_scope": "NA",
+  "tid": "<tenant-id>",
+  "unique_name": "christian.posta@solo.io",
+  "upn": "christian.posta@solo.io",
+  "uti": "T4cEjvQL0UWsOKdg_DICAA",
+  "ver": "1.0",
+  "wids": [
+    "db506228-d27e-4b7d-95e5-295956d6615f",
+    "e8611ab8-c189-46e8-94e1-60213ab1f814",
+    "b79fbf4d-3ef9-4689-8143-76b194e85509"
+  ],
+  "xms_act_fct": "11 9 3",
+  "xms_ftd": "Plb9b3Bh1d3xh5HcmYti2q5fLAcc2OeWln56eacITYcBdXNzb3V0aC1kc21z",
+  "xms_idrel": "1 8",
+  "xms_par_app_azp": "<blueprint-client-id>",
+  "xms_st": {
+    "sub": "XX5D9M_IIoFoqCuAVHsJgQhJRzq05-Tp2GcpgLl8p7Y"
+  },
+  "xms_sub_fct": "2 3",
+  "xms_tcdt": 1657299251,
+  "xms_tnt_fct": "3 8"
+}
+```
+
 #### Step 5: Use the Resource Token
 
 ```powershell
