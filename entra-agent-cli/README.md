@@ -86,10 +86,12 @@ python -m agent_cli.main list-blueprints --from-graph
 #### Create a New Blueprint
 
 ```bash
-python -m agent_cli.main create-new-blueprint "My Agent Blueprint"
+BLUEPRINT_NAME="My Agent Blueprint"
+python -m agent_cli.main create-new-blueprint $BLUEPRINT_NAME
 
 # With explicit tenant ID
-python -m agent_cli.main create-new-blueprint "My Agent Blueprint" --tenant-id <tenant-id>
+BLUEPRINT_NAME="My Agent Blueprint"
+python -m agent_cli.main create-new-blueprint $BLUEPRINT_NAME --tenant-id $TENANT_ID
 ```
 
 This will:
@@ -97,6 +99,7 @@ This will:
 2. Create the blueprint application
 3. Create the blueprint service principal
 4. Generate and store a client secret
+5. Expose API with `access_as_user` scope (for OBO flows)
 
 #### List Agent Identities
 
@@ -112,14 +115,36 @@ python -m agent_cli.main list-agent-identities --from-graph
 
 First, get your user ID:
 ```bash
-az ad signed-in-user show --query id -o tsv
+USER_ID=$(az ad signed-in-user show --query id -o tsv)
 ```
 
 Then create the agent identity:
 ```bash
-python -m agent_cli.main create-new-agent-identity-from-blueprint "My Agent" \
-    --blueprint "My Agent Blueprint" \
-    --sponsor <your-user-id>
+AGENT_NAME="New Posta Agent"
+python -m agent_cli.main create-new-agent-identity-from-blueprint $AGENT_NAME \
+    --blueprint $BLUEPRINT_NAME \
+    --sponsor $USER_ID
+```
+
+By default, this also grants admin consent for OBO flows to Microsoft Graph. To skip:
+```bash
+NAME="New Posta Agent"
+python -m agent_cli.main create-new-agent-identity-from-blueprint $AGENT_NAME \
+    --blueprint $BLUEPRINT_NAME \
+    --sponsor $USER_ID \
+    --no-enable-obo
+```
+
+#### Grant Admin Consent (for OBO)
+
+If you skipped OBO setup during creation, or need to grant additional scopes:
+```bash
+# Grant default Graph scopes
+python -m agent_cli.main grant-admin-consent "My Agent"
+
+# Grant custom scopes
+python -m agent_cli.main grant-admin-consent "My Agent" \
+    --scopes "User.Read Mail.Read Calendars.Read"
 ```
 
 #### Get Access Token for Agent Identity

@@ -25,6 +25,9 @@ from .graph_client import (
     GraphClient,
     create_full_blueprint,
     create_agent_identity_from_blueprint,
+    grant_agent_admin_consent,
+    MICROSOFT_GRAPH_APP_ID,
+    DEFAULT_OBO_SCOPES,
 )
 
 
@@ -258,11 +261,16 @@ def create_new_agent_identity(
     sponsor_user_id: str = typer.Option(..., "--sponsor", "-s", help="User ID of the sponsor"),
     tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
     save: bool = typer.Option(True, "--save/--no-save", help="Save agent identity to local config"),
+    enable_obo: bool = typer.Option(True, "--enable-obo/--no-enable-obo", help="Grant admin consent for OBO flows (Graph API)"),
+    obo_scopes: str = typer.Option(DEFAULT_OBO_SCOPES, "--obo-scopes", help="Scopes to grant for OBO (space-separated)"),
 ) -> None:
     """Create a new Agent Identity from a stored blueprint.
     
     Requires a blueprint to be created and stored first.
     The sponsor user ID must be provided (e.g., from 'az ad signed-in-user show --query id').
+    
+    By default, grants admin consent for Microsoft Graph OBO flows.
+    Use --no-enable-obo to skip this step.
     """
     tid = require_tenant_id(tenant_id)
     config = get_config()
@@ -275,7 +283,10 @@ def create_new_agent_identity(
         raise typer.Exit(1)
     
     console.print(f"\n[bold]Creating Agent Identity: {name}[/bold]")
-    console.print(f"Using blueprint: {blueprint_name} ({blueprint.app_id})\n")
+    console.print(f"Using blueprint: {blueprint_name} ({blueprint.app_id})")
+    if enable_obo:
+        console.print(f"OBO enabled: Will grant consent for scopes: {obo_scopes}")
+    console.print()
     
     # Get blueprint token
     console.print("[bold blue]Getting blueprint access token...[/bold blue]")
@@ -305,6 +316,31 @@ def create_new_agent_identity(
     if save:
         config.save_agent_identity(agent)
         console.print(f"\n[green]✓ Agent identity saved to config[/green]")
+    
+    # Grant admin consent for OBO if enabled
+    if enable_obo:
+        import time
+        console.print(f"\n[bold blue]Waiting for Azure AD propagation (5 seconds)...[/bold blue]")
+        time.sleep(5)
+        
+        console.print(f"[bold blue]Granting admin consent for OBO...[/bold blue]")
+        console.print("[dim]This requires user authentication with admin permissions[/dim]")
+        
+        # Get user token for granting consent
+        user_token = get_device_code_token(tid, scopes=["DelegatedPermissionGrant.ReadWrite.All", "Application.Read.All"])
+        if user_token:
+            if grant_agent_admin_consent(
+                access_token=user_token.access_token,
+                agent_identity_app_id=agent.app_id,
+                scopes=obo_scopes,
+            ):
+                console.print(f"[green]✓ Admin consent granted for OBO![/green]")
+            else:
+                console.print("[yellow]Warning: Failed to grant admin consent.[/yellow]")
+                console.print("[yellow]You can manually grant consent using 'grant-admin-consent' command.[/yellow]")
+        else:
+            console.print("[yellow]Warning: Could not authenticate to grant consent.[/yellow]")
+            console.print("[yellow]Use 'grant-admin-consent' command to grant consent later.[/yellow]")
     
     console.print(f"\n[bold green]Agent Identity '{name}' created successfully![/bold green]")
     console.print(f"\nID: {agent.id}")
@@ -515,6 +551,64 @@ def get_obo_access_token(
         console.print("  - Ensure admin consent is granted for the Agent Identity")
         console.print("  - Check that the Blueprint exposes the 'access_as_user' scope")
         console.print("  - See OBO-GUIDE.md for detailed setup instructions")
+        raise typer.Exit(1)
+
+
+@app.command("grant-admin-consent")
+def grant_consent(
+    agent_name: str = typer.Argument(..., help="Name of the agent identity"),
+    scopes: str = typer.Option(DEFAULT_OBO_SCOPES, "--scopes", "-s", help="Scopes to grant (space-separated)"),
+    resource: str = typer.Option(MICROSOFT_GRAPH_APP_ID, "--resource", "-r", help="Resource app ID (default: Microsoft Graph)"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+) -> None:
+    """Grant admin consent for an Agent Identity to access resources via OBO.
+    
+    This is required for OBO flows since Agent Identities cannot prompt users
+    for consent. By default, grants consent for Microsoft Graph.
+    
+    Common resources:
+    - Microsoft Graph: 00000003-0000-0000-c000-000000000000
+    
+    Common scopes for Graph OBO:
+    - User.Read openid profile offline_access
+    - Mail.Read Calendars.Read (for email/calendar access)
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Get agent identity
+    agent = config.get_agent_identity(agent_name)
+    if not agent:
+        console.print(f"[red]Agent identity '{agent_name}' not found in local config.[/red]")
+        console.print("Use 'list-agent-identities' to see available agent identities.")
+        raise typer.Exit(1)
+    
+    console.print(f"\n[bold]Granting Admin Consent for Agent Identity: {agent_name}[/bold]")
+    console.print(f"Agent App ID: {agent.app_id}")
+    console.print(f"Resource: {resource}")
+    console.print(f"Scopes: {scopes}\n")
+    
+    # Get user token with required permissions
+    console.print("[bold blue]Authenticating with admin permissions...[/bold blue]")
+    user_token = get_device_code_token(
+        tid, 
+        scopes=["DelegatedPermissionGrant.ReadWrite.All", "Application.Read.All"]
+    )
+    if not user_token:
+        console.print("[red]Failed to authenticate.[/red]")
+        raise typer.Exit(1)
+    
+    # Grant consent
+    if grant_agent_admin_consent(
+        access_token=user_token.access_token,
+        agent_identity_app_id=agent.app_id,
+        resource_app_id=resource,
+        scopes=scopes,
+    ):
+        console.print(f"\n[bold green]✓ Admin consent granted successfully![/bold green]")
+        console.print(f"The agent '{agent_name}' can now perform OBO flows to access the resource.")
+    else:
+        console.print("\n[red]Failed to grant admin consent.[/red]")
         raise typer.Exit(1)
 
 

@@ -298,13 +298,133 @@ class GraphClient:
         
         console.print(f"[red]Failed to create agent identity: {data}[/red]")
         return None
+    
+    def expose_api(
+        self,
+        object_id: str,
+        app_id: str,
+        scope_name: str = "access_as_user",
+    ) -> bool:
+        """Expose an API on an application with a delegated permission scope.
+        
+        This sets the App ID URI and adds a delegated permission scope,
+        which is required for OBO flows.
+        
+        Args:
+            object_id: Application object ID
+            app_id: Application (client) ID
+            scope_name: Name of the scope to add (default: access_as_user)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        import uuid
+        
+        app_id_uri = f"api://{app_id}"
+        scope_id = str(uuid.uuid4())
+        
+        # Update the application with App ID URI and scope
+        body = {
+            "identifierUris": [app_id_uri],
+            "api": {
+                "oauth2PermissionScopes": [
+                    {
+                        "id": scope_id,
+                        "adminConsentDescription": f"Allow the application to access the agent on behalf of the signed-in user",
+                        "adminConsentDisplayName": "Access agent as user",
+                        "isEnabled": True,
+                        "type": "User",
+                        "userConsentDescription": f"Allow the application to access the agent on your behalf",
+                        "userConsentDisplayName": "Access agent as user",
+                        "value": scope_name,
+                    }
+                ]
+            }
+        }
+        
+        success, data = self._request(
+            "PATCH",
+            f"{GRAPH_BETA_URL}/applications/{object_id}",
+            json_data=body,
+        )
+        
+        if success:
+            return True
+        
+        console.print(f"[red]Failed to expose API: {data}[/red]")
+        return False
+    
+    def get_service_principal_by_app_id(self, app_id: str) -> Optional[dict]:
+        """Get a service principal by its application ID.
+        
+        Args:
+            app_id: Application (client) ID
+            
+        Returns:
+            Service principal dict or None
+        """
+        success, data = self._request(
+            "GET",
+            f"{GRAPH_V1_URL}/servicePrincipals?$filter=appId eq '{app_id}'",
+        )
+        
+        if success:
+            values = data.get("value", [])
+            if values:
+                return values[0]
+        return None
+    
+    def grant_admin_consent(
+        self,
+        client_sp_id: str,
+        resource_sp_id: str,
+        scopes: str,
+    ) -> bool:
+        """Grant admin consent for delegated permissions.
+        
+        This creates an OAuth2PermissionGrant that grants consent
+        for all principals in the tenant.
+        
+        Args:
+            client_sp_id: Service principal ID of the client (e.g., Agent Identity)
+            resource_sp_id: Service principal ID of the resource (e.g., Microsoft Graph)
+            scopes: Space-separated list of scopes to grant
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        body = {
+            "clientId": client_sp_id,
+            "consentType": "AllPrincipals",
+            "resourceId": resource_sp_id,
+            "scope": scopes,
+        }
+        
+        success, data = self._request(
+            "POST",
+            f"{GRAPH_V1_URL}/oauth2PermissionGrants",
+            json_data=body,
+        )
+        
+        if success:
+            return True
+        
+        # Check if consent already exists
+        error = data.get("error", {})
+        if "already exists" in str(error.get("message", "")).lower():
+            console.print("[yellow]Admin consent already exists[/yellow]")
+            return True
+        
+        console.print(f"[red]Failed to grant admin consent: {data}[/red]")
+        return False
 
 
 def create_full_blueprint(
     access_token: str,
     display_name: str,
+    enable_obo: bool = True,
 ) -> Optional[BlueprintInfo]:
-    """Create a complete blueprint with principal and client secret.
+    """Create a complete blueprint with principal, client secret, and OBO support.
     
     This performs the full creation flow:
     1. Get current user
@@ -312,10 +432,12 @@ def create_full_blueprint(
     3. Wait for propagation
     4. Create blueprint service principal
     5. Add client secret
+    6. Expose API for OBO (if enable_obo=True)
     
     Args:
         access_token: User access token with required permissions
         display_name: Name for the blueprint
+        enable_obo: If True, expose API with access_as_user scope for OBO flows
         
     Returns:
         BlueprintInfo with all details or None
@@ -369,6 +491,17 @@ def create_full_blueprint(
     console.print(f"[yellow]  Secret: {secret}[/yellow]")
     console.print("[yellow]  (Save this! You won't see it again)[/yellow]")
     
+    # Step 6: Expose API for OBO (if enabled)
+    if enable_obo:
+        console.print("[bold blue]Exposing API for OBO flows...[/bold blue]")
+        if client.expose_api(object_id, app_id):
+            console.print(f"[green]✓ API exposed![/green]")
+            console.print(f"  App ID URI: api://{app_id}")
+            console.print(f"  Scope: api://{app_id}/access_as_user")
+        else:
+            console.print("[yellow]Warning: Failed to expose API. OBO flows may not work.[/yellow]")
+            console.print("[yellow]You can manually set this up - see OBO-GUIDE.md[/yellow]")
+    
     return BlueprintInfo(
         app_id=app_id,
         object_id=object_id,
@@ -413,4 +546,63 @@ def create_agent_identity_from_blueprint(
         )
     
     return None
+
+
+# Microsoft Graph application ID (well-known)
+MICROSOFT_GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
+
+# Default scopes for OBO flows
+DEFAULT_OBO_SCOPES = "User.Read openid profile offline_access"
+
+
+def grant_agent_admin_consent(
+    access_token: str,
+    agent_identity_app_id: str,
+    resource_app_id: str = MICROSOFT_GRAPH_APP_ID,
+    scopes: str = DEFAULT_OBO_SCOPES,
+) -> bool:
+    """Grant admin consent for an agent identity to access a resource.
+    
+    This is required for OBO flows since agent identities cannot
+    prompt users for consent.
+    
+    Args:
+        access_token: User access token with DelegatedPermissionGrant.ReadWrite.All
+        agent_identity_app_id: Agent identity's application ID
+        resource_app_id: Resource application ID (default: Microsoft Graph)
+        scopes: Space-separated scopes to grant
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    client = GraphClient(access_token)
+    
+    # Get the agent identity's service principal ID
+    console.print("[bold blue]Looking up agent identity service principal...[/bold blue]")
+    agent_sp = client.get_service_principal_by_app_id(agent_identity_app_id)
+    if not agent_sp:
+        console.print(f"[red]Agent identity service principal not found for app ID: {agent_identity_app_id}[/red]")
+        return False
+    
+    agent_sp_id = agent_sp["id"]
+    console.print(f"[green]✓ Agent Identity SP ID: {agent_sp_id}[/green]")
+    
+    # Get the resource's service principal ID
+    console.print("[bold blue]Looking up resource service principal...[/bold blue]")
+    resource_sp = client.get_service_principal_by_app_id(resource_app_id)
+    if not resource_sp:
+        console.print(f"[red]Resource service principal not found for app ID: {resource_app_id}[/red]")
+        return False
+    
+    resource_sp_id = resource_sp["id"]
+    resource_name = resource_sp.get("displayName", resource_app_id)
+    console.print(f"[green]✓ Resource SP ID: {resource_sp_id} ({resource_name})[/green]")
+    
+    # Grant admin consent
+    console.print(f"[bold blue]Granting admin consent for scopes: {scopes}...[/bold blue]")
+    if client.grant_admin_consent(agent_sp_id, resource_sp_id, scopes):
+        console.print(f"[green]✓ Admin consent granted![/green]")
+        return True
+    
+    return False
 
