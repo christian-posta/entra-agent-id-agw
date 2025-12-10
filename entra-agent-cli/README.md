@@ -140,6 +140,37 @@ This displays all intermediate tokens:
 - **T1 Token**: Blueprint token with `fmi_path` pointing to the agent identity
 - **T2 Token**: The final agent identity access token
 
+#### Get OBO Token for Agent Identity (On-Behalf-Of)
+
+Get a token where the agent identity acts on behalf of a user to access downstream resources:
+
+```bash
+# Interactive: Device code flow to authenticate user
+python -m agent_cli.main get-obo-token-for-agent-identity "My Agent"
+
+# With existing user token (e.g., from az cli)
+python -m agent_cli.main get-obo-token-for-agent-identity "My Agent" \
+    --user-token "$USER_TOKEN"
+
+# With custom target scope
+python -m agent_cli.main get-obo-token-for-agent-identity "My Agent" \
+    --scope "https://graph.microsoft.com/.default"
+
+# Output the token value
+python -m agent_cli.main get-obo-token-for-agent-identity "My Agent" --output-token
+```
+
+**Prerequisites for OBO:**
+1. Blueprint must expose an API with `access_as_user` scope (App ID URI: `api://{blueprint-client-id}`)
+2. Admin consent must be granted for the Agent Identity to access resources on behalf of users
+
+See `OBO-GUIDE.md` for detailed setup instructions.
+
+This displays all intermediate tokens:
+- **Tc Token**: User token with Blueprint as audience
+- **T1 Token**: Blueprint impersonation token with `fmi_path`
+- **T2 Token**: Final OBO token (agent acting on behalf of user)
+
 #### Show Configuration
 
 ```bash
@@ -149,15 +180,41 @@ python -m agent_cli.main config
 python -m agent_cli.main config --path
 ```
 
-## Token Exchange Flow
+## Token Exchange Flows
 
-When getting an agent identity token, the CLI performs the following steps:
+### App-Only Token (get-access-token-for-agent-identity)
+
+When getting an agent identity token without user context:
 
 1. **Blueprint Token** (optional, for display): Standard client credentials token for the blueprint
 2. **T1 Token**: Client credentials with `fmi_path` parameter pointing to the agent identity's app ID
 3. **T2 Token**: Exchange T1 using `client_assertion` to get the final agent identity token
 
 This mirrors the PowerShell flow documented in `BLUEPRINT-CREATION-POWERSHELL.md`.
+
+### OBO Token (get-obo-token-for-agent-identity)
+
+When getting a token where the agent acts on behalf of a user:
+
+```
+User Token (Tc)                Blueprint Token (T1)
+[aud=Blueprint]                [fmi_path=AgentId]
+       \                            /
+        \                          /
+         +--> OBO Exchange <------+
+                   |
+                   v
+          Resource Token (T2)
+          [Agent acting for User]
+```
+
+1. **Tc Token**: User authenticates with Blueprint as audience (`api://{blueprint-id}/access_as_user`)
+2. **T1 Token**: Blueprint impersonation token with `fmi_path` pointing to agent identity
+3. **T2 Token**: OBO exchange using Tc (as `assertion`) and T1 (as `client_assertion`)
+
+The final T2 token allows the agent identity to access resources on behalf of the authenticated user.
+
+This mirrors the PowerShell flow documented in `OBO-GUIDE.md`.
 
 ## Required Permissions
 

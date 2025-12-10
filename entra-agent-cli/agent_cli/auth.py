@@ -415,3 +415,143 @@ def get_agent_identity_token(
         console.print("[green]✓ Got T2 (agent identity) token[/green]")
     
     return blueprint_token, t1_token, t2_token
+
+
+def get_user_token_for_blueprint(
+    tenant_id: str,
+    blueprint_app_id: str,
+    force_refresh: bool = False,
+) -> Optional[TokenResult]:
+    """Get a user token with the Blueprint as the audience.
+    
+    This is the Tc token used in OBO flows. Uses device code flow
+    with scope api://{blueprint_app_id}/access_as_user.
+    
+    Args:
+        tenant_id: Azure AD tenant ID
+        blueprint_app_id: Blueprint application ID (used as audience)
+        force_refresh: If True, skip cache and force new authentication
+        
+    Returns:
+        TokenResult (Tc) if successful, None otherwise
+    """
+    # The scope must target the Blueprint's exposed API
+    scopes = [f"api://{blueprint_app_id}/access_as_user"]
+    
+    return get_device_code_token(
+        tenant_id=tenant_id,
+        scopes=scopes,
+        force_refresh=force_refresh,
+    )
+
+
+def perform_obo_exchange(
+    tenant_id: str,
+    agent_identity_app_id: str,
+    t1_token: str,
+    user_token: str,
+    scope: str = "https://graph.microsoft.com/.default",
+) -> Optional[TokenResult]:
+    """Perform OBO exchange to get resource token (T2) for agent acting on behalf of user.
+    
+    This exchanges:
+    - T1 (blueprint impersonation token) as client_assertion
+    - Tc (user token) as assertion
+    
+    For a resource token where the agent identity acts on behalf of the user.
+    
+    Args:
+        tenant_id: Azure AD tenant ID
+        agent_identity_app_id: Agent identity application ID
+        t1_token: Blueprint impersonation token (T1)
+        user_token: User token with Blueprint audience (Tc)
+        scope: Target resource scope
+        
+    Returns:
+        TokenResult (T2 - OBO token) if successful, None otherwise
+    """
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    
+    data = {
+        "client_id": agent_identity_app_id,
+        "scope": scope,
+        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        "client_assertion": t1_token,
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": user_token,
+        "requested_token_use": "on_behalf_of",
+    }
+    
+    with httpx.Client() as client:
+        response = client.post(
+            token_url,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return TokenResult(
+                access_token=result["access_token"],
+                token_type=result.get("token_type", "Bearer"),
+                expires_in=result.get("expires_in", 0),
+            )
+        else:
+            error = response.json()
+            console.print(f"[red]OBO exchange failed: {error.get('error_description', error.get('error', 'Unknown error'))}[/red]")
+            return None
+
+
+def get_obo_token(
+    tenant_id: str,
+    blueprint_app_id: str,
+    client_secret: str,
+    agent_identity_app_id: str,
+    user_token: str,
+    scope: str = "https://graph.microsoft.com/.default",
+) -> tuple[Optional[TokenResult], Optional[TokenResult]]:
+    """Get an OBO token for an agent identity acting on behalf of a user.
+    
+    This performs the Agent Identity OBO flow:
+    1. Get T1: Blueprint token with fmi_path pointing to agent identity
+    2. Get T2: OBO exchange using T1 (as client_assertion) and Tc (user token as assertion)
+    
+    Args:
+        tenant_id: Azure AD tenant ID
+        blueprint_app_id: Blueprint application ID
+        client_secret: Blueprint client secret
+        agent_identity_app_id: Agent identity application ID
+        user_token: User token with Blueprint audience (Tc)
+        scope: Target resource scope for the OBO token
+        
+    Returns:
+        Tuple of (t1_token, t2_obo_token)
+    """
+    # Step 1: Get T1 token (blueprint impersonation token)
+    console.print("[bold blue]Step 1: Getting T1 (blueprint impersonation token with fmi_path)...[/bold blue]")
+    t1_token = get_blueprint_token_with_fmi_path(
+        tenant_id=tenant_id,
+        blueprint_app_id=blueprint_app_id,
+        client_secret=client_secret,
+        agent_identity_app_id=agent_identity_app_id,
+    )
+    
+    if not t1_token:
+        return None, None
+    
+    console.print("[green]✓ Got T1 token[/green]")
+    
+    # Step 2: OBO exchange for T2
+    console.print("[bold blue]Step 2: Performing OBO exchange for T2 (agent acting on behalf of user)...[/bold blue]")
+    t2_token = perform_obo_exchange(
+        tenant_id=tenant_id,
+        agent_identity_app_id=agent_identity_app_id,
+        t1_token=t1_token.access_token,
+        user_token=user_token,
+        scope=scope,
+    )
+    
+    if t2_token:
+        console.print("[green]✓ Got T2 (OBO) token[/green]")
+    
+    return t1_token, t2_token

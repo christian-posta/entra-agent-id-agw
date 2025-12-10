@@ -13,6 +13,8 @@ from .auth import (
     get_device_code_token,
     get_client_credentials_token,
     get_agent_identity_token,
+    get_user_token_for_blueprint,
+    get_obo_token,
     clear_token_cache,
     get_cached_accounts,
     READ_ONLY_SCOPES,
@@ -391,6 +393,128 @@ def get_access_token(
             console.print(t2_token.access_token)
     else:
         console.print("\n[red]Failed to obtain agent identity token.[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("get-obo-token-for-agent-identity")
+def get_obo_access_token(
+    agent_name: str = typer.Argument(..., help="Name of the agent identity"),
+    blueprint_name: Optional[str] = typer.Option(None, "--blueprint", "-b", help="Blueprint name (auto-detected if saved)"),
+    scope: str = typer.Option("https://graph.microsoft.com/.default", "--scope", "-s", help="Target resource scope"),
+    user_token: Optional[str] = typer.Option(None, "--user-token", "-u", help="Existing user token (Tc) with Blueprint audience"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    show_claims: bool = typer.Option(True, "--show-claims/--hide-claims", help="Display decoded token claims"),
+    output_token: bool = typer.Option(False, "--output-token", "-o", help="Output the final token value"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication for user token"),
+) -> None:
+    """Get an OBO (On-Behalf-Of) token for an Agent Identity acting on behalf of a user.
+    
+    This performs the Agent Identity OBO flow:
+    1. Get Tc: User token with Blueprint as audience (device code or --user-token)
+    2. Get T1: Blueprint impersonation token with fmi_path
+    3. Get T2: OBO exchange for resource token (agent acting for user)
+    
+    Prerequisites:
+    - Blueprint must expose an API with 'access_as_user' scope
+    - Admin consent must be granted for the Agent Identity
+    
+    See OBO-GUIDE.md for setup instructions.
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Get agent identity
+    agent = config.get_agent_identity(agent_name)
+    if not agent:
+        console.print(f"[red]Agent identity '{agent_name}' not found in local config.[/red]")
+        console.print("Use 'list-agent-identities' to see available agent identities.")
+        raise typer.Exit(1)
+    
+    # Determine blueprint to use
+    bp_name = blueprint_name
+    if not bp_name and agent.blueprint_app_id:
+        # Find blueprint by app_id
+        for name, bp in config.list_blueprints().items():
+            if bp.app_id == agent.blueprint_app_id:
+                bp_name = name
+                break
+    
+    if not bp_name:
+        console.print("[red]Could not determine blueprint to use.[/red]")
+        console.print("Specify --blueprint or ensure the agent identity has a stored blueprint_app_id.")
+        raise typer.Exit(1)
+    
+    blueprint = config.get_blueprint(bp_name)
+    if not blueprint:
+        console.print(f"[red]Blueprint '{bp_name}' not found in local config.[/red]")
+        raise typer.Exit(1)
+    
+    console.print(f"\n[bold]Getting OBO Token for Agent Identity: {agent_name}[/bold]")
+    console.print(f"Using blueprint: {bp_name}")
+    console.print(f"Target scope: {scope}\n")
+    
+    # Step 0: Get user token (Tc)
+    tc_token = None
+    if user_token:
+        console.print("[bold blue]Step 0: Using provided user token (Tc)...[/bold blue]")
+        from .models import TokenResult
+        tc_token = TokenResult(access_token=user_token)
+        console.print("[green]✓ User token provided[/green]")
+    else:
+        console.print("[bold blue]Step 0: Getting user token (Tc) via device code flow...[/bold blue]")
+        console.print(f"[dim]Requesting scope: api://{blueprint.app_id}/access_as_user[/dim]")
+        tc_token = get_user_token_for_blueprint(
+            tenant_id=tid,
+            blueprint_app_id=blueprint.app_id,
+            force_refresh=force_refresh,
+        )
+        if not tc_token:
+            console.print("[red]Failed to get user token.[/red]")
+            console.print("[yellow]Hint: Ensure the Blueprint has an exposed API with 'access_as_user' scope.[/yellow]")
+            raise typer.Exit(1)
+        console.print("[green]✓ Got user token (Tc)[/green]")
+    
+    # Get OBO token (T1 and T2)
+    t1_token, t2_token = get_obo_token(
+        tenant_id=tid,
+        blueprint_app_id=blueprint.app_id,
+        client_secret=blueprint.client_secret,
+        agent_identity_app_id=agent.app_id,
+        user_token=tc_token.access_token,
+        scope=scope,
+    )
+    
+    # Display tokens
+    if show_claims:
+        console.print("\n")
+        
+        if tc_token:
+            display_token_claims("Tc Token (User token, aud=Blueprint)", tc_token.decoded_claims())
+        
+        if t1_token:
+            display_token_claims("T1 Token (Blueprint impersonation with fmi_path)", t1_token.decoded_claims())
+        
+        if t2_token:
+            display_token_claims("T2 Token (OBO - Agent acting on behalf of User)", t2_token.decoded_claims())
+    
+    if t2_token:
+        console.print(f"\n[bold green]✓ Successfully obtained OBO token![/bold green]")
+        console.print(f"Token expires in: {t2_token.expires_in} seconds")
+        
+        # Show who the agent is acting on behalf of
+        claims = t2_token.decoded_claims()
+        if claims.get("name") or claims.get("upn"):
+            console.print(f"Acting on behalf of: {claims.get('name', 'N/A')} ({claims.get('upn', 'N/A')})")
+        
+        if output_token:
+            console.print(f"\n[bold]Access Token:[/bold]")
+            console.print(t2_token.access_token)
+    else:
+        console.print("\n[red]Failed to obtain OBO token.[/red]")
+        console.print("[yellow]Hints:[/yellow]")
+        console.print("  - Ensure admin consent is granted for the Agent Identity")
+        console.print("  - Check that the Blueprint exposes the 'access_as_user' scope")
+        console.print("  - See OBO-GUIDE.md for detailed setup instructions")
         raise typer.Exit(1)
 
 
