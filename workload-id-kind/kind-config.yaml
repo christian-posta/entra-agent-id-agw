@@ -4,7 +4,7 @@ nodes:
 - role: control-plane
   extraMounts:
   # Mount the signing key into the API server
-  - hostPath: /Users/ceposta/temp/workload-identity-setup/sa-signer.key
+  - hostPath: ./sa-signer.key
     containerPath: /etc/kubernetes/pki/sa-signer.key
     readOnly: true
   kubeadmConfigPatches:

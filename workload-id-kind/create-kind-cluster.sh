@@ -1,0 +1,1 @@
+kind create cluster --name workload-identity --config ./kind-config.yaml
