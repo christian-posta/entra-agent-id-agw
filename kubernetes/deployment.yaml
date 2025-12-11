@@ -12,7 +12,10 @@ spec:
     metadata:
       labels:
         app: demo-app
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: sidecar-sa
+      
       containers:
       # Your application container
       - name: app
@@ -30,8 +33,14 @@ spec:
         envFrom:
         - configMapRef:
             name: sidecar-config
-        - secretRef:
-            name: sidecar-secret
+        # Note: No secretRef needed - using workload identity federation
+        
+        volumeMounts:
+        # Mount the projected service account token
+        - name: azure-identity-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+        
         livenessProbe:
           httpGet:
             path: /healthz
@@ -50,3 +59,13 @@ spec:
               value: localhost            
           initialDelaySeconds: 5
           periodSeconds: 5
+      
+      volumes:
+      # Projected service account token with specific audience for Azure token exchange
+      - name: azure-identity-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: azure-identity-token
+              expirationSeconds: 3600
+              audience: api://AzureADTokenExchange

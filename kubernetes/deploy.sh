@@ -15,7 +15,8 @@ else
 fi
 
 # Verify required variables are set
-required_vars=("TENANT_ID" "CLIENT_ID" "CLIENT_SECRET")
+# Note: CLIENT_SECRET is no longer required - using workload identity federation
+required_vars=("TENANT_ID" "CLIENT_ID")
 for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then
         echo "Error: Required variable $var is not set in .env"
@@ -32,13 +33,15 @@ fi
 
 echo "Deploying to namespace: entra-demo"
 
+# Apply ServiceAccount with substitution
+echo "Applying serviceaccount..."
+envsubst < "$SCRIPT_DIR/serviceaccount.yaml" | kubectl apply -f -
+
 # Apply ConfigMap with substitution
 echo "Applying sidecar-config..."
 envsubst < "$SCRIPT_DIR/sidecar-config.yaml" | kubectl apply -f -
 
-# Apply Secret with substitution
-echo "Applying sidecar-secret..."
-envsubst < "$SCRIPT_DIR/sidecar-secret.yaml" | kubectl apply -f -
+# Note: No secret needed - using workload identity federation
 
 # Apply Deployment (no substitution needed)
 echo "Applying deployment..."

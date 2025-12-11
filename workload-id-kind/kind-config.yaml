@@ -1,0 +1,24 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraMounts:
+  # Mount the signing key into the API server
+  - hostPath: /Users/ceposta/temp/workload-identity-setup/sa-signer.key
+    containerPath: /etc/kubernetes/pki/sa-signer.key
+    readOnly: true
+  kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        # Use our custom signing key
+        service-account-signing-key-file: /etc/kubernetes/pki/sa-signer.key
+        service-account-key-file: /etc/kubernetes/pki/sa-signer.key
+        # Set the issuer to our Azure Blob URL
+        service-account-issuer: https://oidc7de4f053.blob.core.windows.net/oidc
+        # API audiences - include the Azure token exchange audience
+        api-audiences: api://AzureADTokenExchange,https://kubernetes.default.svc
+    controllerManager:
+      extraArgs:
+        service-account-private-key-file: /etc/kubernetes/pki/sa-signer.key

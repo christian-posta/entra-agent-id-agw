@@ -10,8 +10,10 @@ data:
   AzureAd__TenantId: "${TENANT_ID}"
   AzureAd__ClientId: "${CLIENT_ID}"
   
-  # Credential source type
-  AzureAd__ClientCredentials__0__SourceType: "ClientSecret"
+  # Credential source type - Use workload identity (file-based token)
+  AzureAd__ClientCredentials__0__SourceType: "SignedAssertionFilePath"
+  # Path where the projected service account token will be mounted
+  AzureAd__ClientCredentials__0__SignedAssertionFileDiskPath: "/var/run/secrets/tokens/azure-identity-token"
   
   # Downstream API configuration (example: Microsoft Graph)
   DownstreamApis__graph__BaseUrl: "https://graph.microsoft.com/v1.0/"
