@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 from dataclasses import dataclass
 
 import httpx
@@ -25,18 +25,56 @@ class MCPResponse:
 
 
 class MCPClient:
-    """Client for connecting to MCP servers via SSE."""
+    """Client for connecting to MCP servers via SSE with optional Bearer auth."""
     
-    def __init__(self, server: MCPServer):
+    def __init__(
+        self,
+        server: MCPServer,
+        access_token: Optional[str] = None,
+        token_provider: Optional[Callable[[], Optional[str]]] = None,
+    ):
         """Initialize MCP client.
         
         Args:
             server: MCP server configuration
+            access_token: Static Bearer token for authentication
+            token_provider: Callable that returns a fresh token (for dynamic auth)
         """
         self.server = server
+        self._access_token = access_token
+        self._token_provider = token_provider
         self._session_url: Optional[str] = None
         self._tools: list[MCPTool] = []
         self._connected = False
+    
+    def _get_auth_headers(self) -> dict[str, str]:
+        """Get authentication headers for requests.
+        
+        Returns:
+            Dictionary of headers including Authorization if token is available
+        """
+        headers = {}
+        
+        # Get token from provider or static token
+        token = None
+        if self._token_provider:
+            token = self._token_provider()
+        elif self._access_token:
+            token = self._access_token
+        
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        
+        return headers
+    
+    def update_token(self, token: str) -> None:
+        """Update the access token.
+        
+        Args:
+            token: New Bearer token
+        """
+        self._access_token = token
+        self._token_provider = None  # Clear provider, use static token
     
     @property
     def is_connected(self) -> bool:
@@ -55,13 +93,26 @@ class MCPClient:
             True if connection successful, False otherwise
         """
         try:
+            auth_headers = self._get_auth_headers()
+            
             # First, establish SSE connection to get the session endpoint
             with httpx.Client(timeout=30.0) as client:
                 # Send initial connection request
+                headers = {"Accept": "text/event-stream"}
+                headers.update(auth_headers)
+                
                 response = client.get(
                     self.server.url,
-                    headers={"Accept": "text/event-stream"},
+                    headers=headers,
                 )
+                
+                if response.status_code == 401:
+                    console.print(f"[red]Authentication failed for {self.server.name}: Unauthorized[/red]")
+                    return False
+                
+                if response.status_code == 403:
+                    console.print(f"[red]Access denied to {self.server.name}: Forbidden[/red]")
+                    return False
                 
                 if response.status_code != 200:
                     console.print(f"[red]Failed to connect to {self.server.name}: HTTP {response.status_code}[/red]")
@@ -131,12 +182,20 @@ class MCPClient:
         }
         
         try:
+            auth_headers = self._get_auth_headers()
+            headers = {"Content-Type": "application/json"}
+            headers.update(auth_headers)
+            
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(
                     self._session_url,
                     json=payload,
-                    headers={"Content-Type": "application/json"}
+                    headers=headers,
                 )
+                
+                if response.status_code == 401:
+                    console.print(f"[red]MCP request unauthorized - token may be expired[/red]")
+                    return None
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -164,8 +223,10 @@ class MCPClient:
             MCPResponse when received, None on timeout
         """
         try:
+            auth_headers = self._get_auth_headers()
+            
             with httpx.Client(timeout=60.0) as client:
-                with connect_sse(client, "GET", self.server.url) as event_source:
+                with connect_sse(client, "GET", self.server.url, headers=auth_headers) as event_source:
                     for sse in event_source.iter_sse():
                         if sse.event == "message":
                             data = json.loads(sse.data)
@@ -197,11 +258,15 @@ class MCPClient:
         }
         
         try:
+            auth_headers = self._get_auth_headers()
+            headers = {"Content-Type": "application/json"}
+            headers.update(auth_headers)
+            
             with httpx.Client(timeout=30.0) as client:
                 client.post(
                     self._session_url,
                     json=payload,
-                    headers={"Content-Type": "application/json"}
+                    headers=headers,
                 )
         except Exception:
             pass  # Notifications don't require acknowledgment
@@ -265,22 +330,48 @@ class MCPClient:
 
 
 class MCPManager:
-    """Manages multiple MCP server connections."""
+    """Manages multiple MCP server connections with optional authentication."""
     
-    def __init__(self):
-        """Initialize MCP manager."""
+    def __init__(
+        self,
+        token_provider: Optional[Callable[[], Optional[str]]] = None,
+    ):
+        """Initialize MCP manager.
+        
+        Args:
+            token_provider: Optional callable that returns a Bearer token for MCP/Gateway auth.
+                           If provided, all MCP server connections will use this token.
+        """
         self._clients: dict[str, MCPClient] = {}
+        self._token_provider = token_provider
     
-    def add_server(self, server: MCPServer) -> bool:
+    def set_token_provider(self, provider: Callable[[], Optional[str]]) -> None:
+        """Set the token provider for MCP authentication.
+        
+        Args:
+            provider: Callable that returns a Bearer token
+        """
+        self._token_provider = provider
+        
+        # Update existing clients
+        for client in self._clients.values():
+            client._token_provider = provider
+    
+    def add_server(self, server: MCPServer, access_token: Optional[str] = None) -> bool:
         """Add and connect to an MCP server.
         
         Args:
             server: MCP server configuration
+            access_token: Optional static Bearer token (overrides token_provider for this server)
             
         Returns:
             True if connection successful, False otherwise
         """
-        client = MCPClient(server)
+        client = MCPClient(
+            server=server,
+            access_token=access_token,
+            token_provider=self._token_provider if not access_token else None,
+        )
         if client.connect():
             self._clients[server.name] = client
             return True
@@ -355,4 +446,3 @@ class MCPManager:
     def connected_servers(self) -> list[str]:
         """Get list of connected server names."""
         return list(self._clients.keys())
-

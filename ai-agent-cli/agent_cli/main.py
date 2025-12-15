@@ -5,20 +5,20 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.markdown import Markdown
 
 from .auth import (
-    get_device_code_token,
+    get_user_token_for_blueprint,
     clear_token_cache,
     get_current_username,
-    AZURE_OPENAI_SCOPES,
+    OBOTokenManager,
+    AZURE_COGNITIVE_SERVICES_SCOPE,
 )
 from .config import get_config
 from .models import MCPServer, TokenResult
 from .mcp_client import MCPManager
-from .agent import Agent, create_agent_with_entra_token, create_agent_with_api_key
+from .agent import Agent, create_agent_with_api_key, create_agent_with_obo_token
 
 
 app = typer.Typer(
@@ -39,12 +39,12 @@ def require_azure_openai_config() -> tuple[str, str, str]:
     
     if not config.azure_openai_endpoint:
         console.print("[red]Error: Azure OpenAI endpoint not configured.[/red]")
-        console.print("Set AZURE_OPENAI_ENDPOINT in .env file or configure via CLI")
+        console.print("Set AZURE_OPENAI_ENDPOINT in .env file")
         raise typer.Exit(1)
     
     if not config.azure_openai_deployment:
         console.print("[red]Error: Azure OpenAI deployment not configured.[/red]")
-        console.print("Set AZURE_OPENAI_DEPLOYMENT in .env file or configure via CLI")
+        console.print("Set AZURE_OPENAI_DEPLOYMENT in .env file")
         raise typer.Exit(1)
     
     return (
@@ -54,76 +54,19 @@ def require_azure_openai_config() -> tuple[str, str, str]:
     )
 
 
-def authenticate() -> Optional[TokenResult]:
-    """Authenticate using device code flow.
-    
-    Returns:
-        TokenResult if successful, None otherwise
-    """
-    config = get_config()
-    
-    if config.azure_openai_auth_mode == "api_key":
-        # No Entra auth needed for API key mode
-        return None
-    
-    if not config.tenant_id:
-        console.print("[red]Error: Tenant ID not configured.[/red]")
-        console.print("Set TENANT_ID in .env file")
-        raise typer.Exit(1)
-    
-    return get_device_code_token(
-        tenant_id=config.tenant_id,
-        scopes=AZURE_OPENAI_SCOPES,
-    )
-
-
-def create_agent(token: Optional[TokenResult], mcp_manager: Optional[MCPManager] = None) -> Agent:
-    """Create an agent with the current configuration.
-    
-    Args:
-        token: Entra token (for Entra auth mode)
-        mcp_manager: Optional MCP manager
-        
-    Returns:
-        Configured Agent
-    """
-    config = get_config()
-    endpoint, deployment, api_version = require_azure_openai_config()
-    
-    if config.azure_openai_auth_mode == "api_key":
-        if not config.azure_openai_api_key:
-            console.print("[red]Error: API key not configured.[/red]")
-            console.print("Set AZURE_OPENAI_API_KEY in .env file")
-            raise typer.Exit(1)
-        
-        return create_agent_with_api_key(
-            endpoint=endpoint,
-            deployment=deployment,
-            api_key=config.azure_openai_api_key,
-            api_version=api_version,
-            mcp_manager=mcp_manager,
-        )
-    else:
-        if not token:
-            console.print("[red]Error: No token available for Entra auth.[/red]")
-            raise typer.Exit(1)
-        
-        return create_agent_with_entra_token(
-            endpoint=endpoint,
-            deployment=deployment,
-            token=token,
-            api_version=api_version,
-            mcp_manager=mcp_manager,
-        )
-
-
-def display_menu(username: Optional[str] = None) -> None:
+def display_menu(username: Optional[str] = None, auth_mode: str = "api_key") -> None:
     """Display the main menu.
     
     Args:
         username: Logged in username to display
+        auth_mode: Authentication mode (entra or api_key)
     """
-    login_status = f"Logged in as: [green]{username}[/green]" if username else "[yellow]Not logged in (API key mode)[/yellow]"
+    if auth_mode == "api_key":
+        login_status = "[yellow]Test Mode (API Key)[/yellow]"
+    elif username:
+        login_status = f"Logged in as: [green]{username}[/green]"
+    else:
+        login_status = "[yellow]Entra Mode (OBO)[/yellow]"
     
     menu_text = f"""
 [bold cyan]═══════════════════════════════════════[/bold cyan]
@@ -330,45 +273,115 @@ def run(
     
     # Check configuration
     if not config.is_configured():
-        console.print("[red]Error: Azure OpenAI is not configured.[/red]")
-        console.print("\nPlease set the following in your .env file:")
-        console.print("  - TENANT_ID (for Entra auth)")
+        console.print("[red]Error: Configuration incomplete.[/red]")
+        console.print("\nFor API Key mode (testing), set:")
+        console.print("  - AUTH_MODE=api_key")
         console.print("  - AZURE_OPENAI_ENDPOINT")
         console.print("  - AZURE_OPENAI_DEPLOYMENT")
-        console.print("  - AZURE_OPENAI_AUTH_MODE (entra or api_key)")
-        console.print("  - AZURE_OPENAI_API_KEY (if using api_key mode)")
+        console.print("  - AZURE_OPENAI_API_KEY")
+        console.print("\nFor Entra mode (production with OBO), set:")
+        console.print("  - AUTH_MODE=entra")
+        console.print("  - TENANT_ID")
+        console.print("  - AZURE_OPENAI_ENDPOINT")
+        console.print("  - AZURE_OPENAI_DEPLOYMENT")
+        console.print("  - BLUEPRINT_APP_ID")
+        console.print("  - BLUEPRINT_CLIENT_SECRET")
+        console.print("  - AGENT_IDENTITY_APP_ID")
         raise typer.Exit(1)
     
-    # Authenticate if using Entra
-    token: Optional[TokenResult] = None
-    username: Optional[str] = None
+    endpoint, deployment, api_version = require_azure_openai_config()
     
-    if config.azure_openai_auth_mode == "entra":
-        console.print("[bold blue]Authenticating with Microsoft Entra...[/bold blue]")
-        token = get_device_code_token(
+    # Variables for session
+    username: Optional[str] = None
+    agent: Optional[Agent] = None
+    mcp_manager: Optional[MCPManager] = None
+    obo_manager: Optional[OBOTokenManager] = None
+    
+    if config.auth_mode == "api_key":
+        # Test mode: API key authentication
+        console.print("[bold yellow]Running in TEST MODE (API Key)[/bold yellow]")
+        console.print("[dim]MCP calls will not have authentication.[/dim]\n")
+        
+        # Create MCP manager without auth
+        mcp_manager = MCPManager()
+        connect_saved_mcp_servers(mcp_manager)
+        
+        # Create agent with API key
+        agent = create_agent_with_api_key(
+            endpoint=endpoint,
+            deployment=deployment,
+            api_key=config.azure_openai_api_key,
+            api_version=api_version,
+            mcp_manager=mcp_manager,
+        )
+    
+    else:
+        # Production mode: Entra OBO authentication
+        console.print("[bold blue]Running in PRODUCTION MODE (Entra OBO)[/bold blue]\n")
+        
+        # Step 1: User login with Blueprint scope
+        console.print("[bold]Step 1: User Authentication[/bold]")
+        console.print(f"[dim]Requesting token with Blueprint audience: api://{config.blueprint_app_id}[/dim]")
+        
+        user_token = get_user_token_for_blueprint(
             tenant_id=config.tenant_id,
-            scopes=AZURE_OPENAI_SCOPES,
+            blueprint_app_id=config.blueprint_app_id,
             force_refresh=force_refresh,
         )
         
-        if not token:
-            console.print("[red]Authentication failed.[/red]")
+        if not user_token:
+            console.print("[red]User authentication failed.[/red]")
             raise typer.Exit(1)
         
         username = get_current_username(config.tenant_id)
-    else:
-        console.print("[dim]Using API key authentication[/dim]")
-    
-    # Initialize MCP manager and connect to saved servers
-    mcp_manager = MCPManager()
-    connect_saved_mcp_servers(mcp_manager)
-    
-    # Create agent
-    agent = create_agent(token, mcp_manager)
+        console.print(f"[green]✓ Logged in as: {username}[/green]\n")
+        
+        # Step 2: Create OBO Token Manager
+        console.print("[bold]Step 2: Initializing OBO Token Manager[/bold]")
+        obo_manager = OBOTokenManager(
+            tenant_id=config.tenant_id,
+            blueprint_app_id=config.blueprint_app_id,
+            blueprint_client_secret=config.blueprint_client_secret,
+            agent_identity_app_id=config.agent_identity_app_id,
+            user_token=user_token.access_token,
+        )
+        
+        # Step 3: Get OBO token for Azure OpenAI
+        console.print("[bold]Step 3: Getting OBO token for Azure OpenAI[/bold]")
+        aoai_token = obo_manager.get_azure_openai_token()
+        
+        if not aoai_token:
+            console.print("[red]Failed to get OBO token for Azure OpenAI.[/red]")
+            console.print("[yellow]Hint: Ensure admin consent is granted for the Agent Identity.[/yellow]")
+            raise typer.Exit(1)
+        
+        console.print("[green]✓ Azure OpenAI OBO token acquired[/green]\n")
+        
+        # Step 4: Create MCP manager with OBO token provider
+        # The token provider returns the access token string for MCP gateway authentication
+        def mcp_token_provider() -> Optional[str]:
+            # For MCP, we can use the same Azure OpenAI token or get a specific gateway token
+            # Here we'll use a generic approach - MCP servers in this flow receive the OBO token
+            token = obo_manager.get_azure_openai_token()
+            return token.access_token if token else None
+        
+        mcp_manager = MCPManager(token_provider=mcp_token_provider)
+        connect_saved_mcp_servers(mcp_manager)
+        
+        # Step 5: Create agent with OBO token
+        agent = create_agent_with_obo_token(
+            endpoint=endpoint,
+            deployment=deployment,
+            token=aoai_token,
+            api_version=api_version,
+            mcp_manager=mcp_manager,
+        )
+        
+        console.print("[bold green]✓ Agent initialized with OBO authentication[/bold green]\n")
     
     # Main menu loop
     while True:
-        display_menu(username)
+        display_menu(username, config.auth_mode)
         
         try:
             choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5", "6"])
@@ -392,7 +405,10 @@ def run(
             break
     
     # Cleanup
-    mcp_manager.disconnect_all()
+    if mcp_manager:
+        mcp_manager.disconnect_all()
+    if obo_manager:
+        obo_manager.clear_cache()
 
 
 @app.command()
@@ -407,10 +423,21 @@ def config_show() -> None:
     table.add_column("Value", style="white")
     
     table.add_row("Config file", str(config.config_path))
+    table.add_row("Auth mode", config.auth_mode)
+    table.add_row("", "")
+    
+    # Entra settings
+    table.add_row("[bold]Entra ID[/bold]", "")
     table.add_row("Tenant ID", config.tenant_id or "[dim]Not set[/dim]")
-    table.add_row("Auth mode", config.azure_openai_auth_mode)
-    table.add_row("Azure OpenAI Endpoint", config.azure_openai_endpoint or "[dim]Not set[/dim]")
-    table.add_row("Azure OpenAI Deployment", config.azure_openai_deployment or "[dim]Not set[/dim]")
+    table.add_row("Blueprint App ID", config.blueprint_app_id or "[dim]Not set[/dim]")
+    table.add_row("Blueprint Secret", "[green]Set[/green]" if config.blueprint_client_secret else "[dim]Not set[/dim]")
+    table.add_row("Agent Identity App ID", config.agent_identity_app_id or "[dim]Not set[/dim]")
+    table.add_row("", "")
+    
+    # Azure OpenAI settings
+    table.add_row("[bold]Azure OpenAI[/bold]", "")
+    table.add_row("Endpoint", config.azure_openai_endpoint or "[dim]Not set[/dim]")
+    table.add_row("Deployment", config.azure_openai_deployment or "[dim]Not set[/dim]")
     table.add_row("API Version", config.azure_openai_api_version)
     table.add_row("API Key", "[green]Set[/green]" if config.azure_openai_api_key else "[dim]Not set[/dim]")
     
@@ -444,4 +471,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

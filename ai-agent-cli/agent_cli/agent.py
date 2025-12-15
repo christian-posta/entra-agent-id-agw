@@ -1,13 +1,10 @@
 """Azure OpenAI agent with tool calling support."""
 
 import json
-from typing import Optional, Generator
+from typing import Optional, Generator, Callable
 
 from openai import AzureOpenAI
-from azure.identity import get_bearer_token_provider, DefaultAzureCredential
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
 
 from .models import ChatMessage, TokenResult
 from .mcp_client import MCPManager
@@ -35,6 +32,7 @@ Be concise but thorough in your responses."""
         api_version: str = "2024-02-15-preview",
         api_key: Optional[str] = None,
         token: Optional[TokenResult] = None,
+        token_provider: Optional[Callable[[], Optional[str]]] = None,
         mcp_manager: Optional[MCPManager] = None,
     ):
         """Initialize the agent.
@@ -44,7 +42,8 @@ Be concise but thorough in your responses."""
             deployment: Deployment name
             api_version: API version
             api_key: API key (for API key auth mode)
-            token: Token result (for Entra auth mode)
+            token: Static token result (for simple Entra auth)
+            token_provider: Callable that returns a fresh token (for OBO with refresh)
             mcp_manager: MCP manager for tool access
         """
         self.endpoint = endpoint
@@ -53,38 +52,65 @@ Be concise but thorough in your responses."""
         self.mcp_manager = mcp_manager or MCPManager()
         self._conversation: list[ChatMessage] = []
         
+        # Store auth configuration
+        self._api_key = api_key
+        self._token = token
+        self._token_provider = token_provider
+        
         # Initialize OpenAI client
-        if api_key:
-            self._client = AzureOpenAI(
-                azure_endpoint=endpoint,
-                api_key=api_key,
-                api_version=api_version,
-            )
-        elif token:
-            # Use token-based auth with a custom token provider
-            self._client = AzureOpenAI(
-                azure_endpoint=endpoint,
-                azure_ad_token=token.access_token,
-                api_version=api_version,
-            )
-        else:
-            # Use DefaultAzureCredential (will use cached Entra token)
-            credential = DefaultAzureCredential()
-            token_provider = get_bearer_token_provider(
-                credential,
-                "https://cognitiveservices.azure.com/.default"
-            )
-            self._client = AzureOpenAI(
-                azure_endpoint=endpoint,
-                azure_ad_token_provider=token_provider,
-                api_version=api_version,
-            )
+        self._client = self._create_client()
         
         # Add system message
         self._conversation.append(ChatMessage(
             role="system",
             content=self.SYSTEM_PROMPT
         ))
+    
+    def _create_client(self) -> AzureOpenAI:
+        """Create Azure OpenAI client with current credentials."""
+        if self._api_key:
+            return AzureOpenAI(
+                azure_endpoint=self.endpoint,
+                api_key=self._api_key,
+                api_version=self.api_version,
+            )
+        elif self._token_provider:
+            # Use token provider for dynamic token retrieval (OBO)
+            token = self._token_provider()
+            if token:
+                return AzureOpenAI(
+                    azure_endpoint=self.endpoint,
+                    azure_ad_token=token,
+                    api_version=self.api_version,
+                )
+            else:
+                raise ValueError("Token provider returned None")
+        elif self._token:
+            # Use static token
+            return AzureOpenAI(
+                azure_endpoint=self.endpoint,
+                azure_ad_token=self._token.access_token,
+                api_version=self.api_version,
+            )
+        else:
+            raise ValueError("No authentication method provided")
+    
+    def refresh_client(self) -> None:
+        """Refresh the OpenAI client with a new token.
+        
+        Call this if using token_provider and the token may have expired.
+        """
+        self._client = self._create_client()
+    
+    def update_token(self, token: TokenResult) -> None:
+        """Update the token and recreate the client.
+        
+        Args:
+            token: New token result
+        """
+        self._token = token
+        self._token_provider = None  # Clear provider, use static token
+        self._client = self._create_client()
     
     def set_mcp_manager(self, manager: MCPManager) -> None:
         """Set the MCP manager for tool access.
@@ -233,34 +259,6 @@ Be concise but thorough in your responses."""
             yield error_msg
 
 
-def create_agent_with_entra_token(
-    endpoint: str,
-    deployment: str,
-    token: TokenResult,
-    api_version: str = "2024-02-15-preview",
-    mcp_manager: Optional[MCPManager] = None,
-) -> Agent:
-    """Create an agent using Entra ID token authentication.
-    
-    Args:
-        endpoint: Azure OpenAI endpoint
-        deployment: Deployment name
-        token: Entra token result
-        api_version: API version
-        mcp_manager: Optional MCP manager
-        
-    Returns:
-        Configured Agent instance
-    """
-    return Agent(
-        endpoint=endpoint,
-        deployment=deployment,
-        api_version=api_version,
-        token=token,
-        mcp_manager=mcp_manager,
-    )
-
-
 def create_agent_with_api_key(
     endpoint: str,
     deployment: str,
@@ -288,3 +286,61 @@ def create_agent_with_api_key(
         mcp_manager=mcp_manager,
     )
 
+
+def create_agent_with_obo_token(
+    endpoint: str,
+    deployment: str,
+    token: TokenResult,
+    api_version: str = "2024-02-15-preview",
+    mcp_manager: Optional[MCPManager] = None,
+) -> Agent:
+    """Create an agent using an OBO token for Azure OpenAI.
+    
+    Args:
+        endpoint: Azure OpenAI endpoint
+        deployment: Deployment name
+        token: OBO token (T2) for Azure Cognitive Services
+        api_version: API version
+        mcp_manager: Optional MCP manager
+        
+    Returns:
+        Configured Agent instance
+    """
+    return Agent(
+        endpoint=endpoint,
+        deployment=deployment,
+        api_version=api_version,
+        token=token,
+        mcp_manager=mcp_manager,
+    )
+
+
+def create_agent_with_token_provider(
+    endpoint: str,
+    deployment: str,
+    token_provider: Callable[[], Optional[str]],
+    api_version: str = "2024-02-15-preview",
+    mcp_manager: Optional[MCPManager] = None,
+) -> Agent:
+    """Create an agent with a dynamic token provider.
+    
+    Use this when you want the agent to automatically get fresh tokens
+    (e.g., from an OBOTokenManager).
+    
+    Args:
+        endpoint: Azure OpenAI endpoint
+        deployment: Deployment name
+        token_provider: Callable that returns a valid access token string
+        api_version: API version
+        mcp_manager: Optional MCP manager
+        
+    Returns:
+        Configured Agent instance
+    """
+    return Agent(
+        endpoint=endpoint,
+        deployment=deployment,
+        api_version=api_version,
+        token_provider=token_provider,
+        mcp_manager=mcp_manager,
+    )

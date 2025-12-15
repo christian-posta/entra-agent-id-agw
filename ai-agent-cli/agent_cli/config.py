@@ -35,11 +35,16 @@ class Config:
         
         # Get configuration from environment
         self._tenant_id_env = os.getenv("TENANT_ID")
+        self._auth_mode_env = os.getenv("AUTH_MODE", "entra")
         self._azure_openai_endpoint_env = os.getenv("AZURE_OPENAI_ENDPOINT")
         self._azure_openai_deployment_env = os.getenv("AZURE_OPENAI_DEPLOYMENT")
         self._azure_openai_api_version_env = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-        self._azure_openai_auth_mode_env = os.getenv("AZURE_OPENAI_AUTH_MODE", "entra")
         self._azure_openai_api_key_env = os.getenv("AZURE_OPENAI_API_KEY")
+        
+        # Blueprint and Agent Identity for OBO flows
+        self._blueprint_app_id_env = os.getenv("BLUEPRINT_APP_ID")
+        self._blueprint_client_secret_env = os.getenv("BLUEPRINT_CLIENT_SECRET")
+        self._agent_identity_app_id_env = os.getenv("AGENT_IDENTITY_APP_ID")
     
     def _load_config(self) -> None:
         """Load configuration from file."""
@@ -74,6 +79,20 @@ class Config:
     def tenant_id(self, value: str) -> None:
         """Set tenant ID in config."""
         self._data["tenant_id"] = value
+        self._save_config()
+    
+    # Auth Mode
+    @property
+    def auth_mode(self) -> str:
+        """Get auth mode from config or environment. Returns 'entra' or 'api_key'."""
+        return self._data.get("auth_mode") or self._auth_mode_env or "entra"
+    
+    @auth_mode.setter
+    def auth_mode(self, value: str) -> None:
+        """Set auth mode in config."""
+        if value not in ("entra", "api_key"):
+            raise ValueError("auth_mode must be 'entra' or 'api_key'")
+        self._data["auth_mode"] = value
         self._save_config()
     
     # Azure OpenAI Endpoint
@@ -112,21 +131,7 @@ class Config:
         self._data["azure_openai_api_version"] = value
         self._save_config()
     
-    # Azure OpenAI Auth Mode
-    @property
-    def azure_openai_auth_mode(self) -> str:
-        """Get Azure OpenAI auth mode from config or environment. Returns 'entra' or 'api_key'."""
-        return self._data.get("azure_openai_auth_mode") or self._azure_openai_auth_mode_env or "entra"
-    
-    @azure_openai_auth_mode.setter
-    def azure_openai_auth_mode(self, value: str) -> None:
-        """Set Azure OpenAI auth mode in config."""
-        if value not in ("entra", "api_key"):
-            raise ValueError("auth_mode must be 'entra' or 'api_key'")
-        self._data["azure_openai_auth_mode"] = value
-        self._save_config()
-    
-    # Azure OpenAI API Key
+    # Azure OpenAI API Key (for api_key mode)
     @property
     def azure_openai_api_key(self) -> Optional[str]:
         """Get Azure OpenAI API key from config or environment."""
@@ -136,6 +141,42 @@ class Config:
     def azure_openai_api_key(self, value: str) -> None:
         """Set Azure OpenAI API key in config."""
         self._data["azure_openai_api_key"] = value
+        self._save_config()
+    
+    # Blueprint App ID (for OBO flows)
+    @property
+    def blueprint_app_id(self) -> Optional[str]:
+        """Get Blueprint application ID from config or environment."""
+        return self._data.get("blueprint_app_id") or self._blueprint_app_id_env
+    
+    @blueprint_app_id.setter
+    def blueprint_app_id(self, value: str) -> None:
+        """Set Blueprint application ID in config."""
+        self._data["blueprint_app_id"] = value
+        self._save_config()
+    
+    # Blueprint Client Secret (for OBO flows)
+    @property
+    def blueprint_client_secret(self) -> Optional[str]:
+        """Get Blueprint client secret from config or environment."""
+        return self._data.get("blueprint_client_secret") or self._blueprint_client_secret_env
+    
+    @blueprint_client_secret.setter
+    def blueprint_client_secret(self, value: str) -> None:
+        """Set Blueprint client secret in config."""
+        self._data["blueprint_client_secret"] = value
+        self._save_config()
+    
+    # Agent Identity App ID (for OBO flows)
+    @property
+    def agent_identity_app_id(self) -> Optional[str]:
+        """Get Agent Identity application ID from config or environment."""
+        return self._data.get("agent_identity_app_id") or self._agent_identity_app_id_env
+    
+    @agent_identity_app_id.setter
+    def agent_identity_app_id(self, value: str) -> None:
+        """Set Agent Identity application ID in config."""
+        self._data["agent_identity_app_id"] = value
         self._save_config()
     
     # MCP Servers
@@ -194,19 +235,24 @@ class Config:
         """Check if the minimum required configuration is present.
         
         Returns:
-            True if Azure OpenAI is configured, False otherwise
+            True if configuration is valid for the selected auth mode
         """
-        if self.azure_openai_auth_mode == "api_key":
+        if self.auth_mode == "api_key":
+            # API key mode: need endpoint, deployment, and API key
             return bool(
                 self.azure_openai_endpoint and 
                 self.azure_openai_deployment and 
                 self.azure_openai_api_key
             )
-        else:  # entra
+        else:  # entra mode
+            # Entra mode: need tenant, endpoint, deployment, and OBO config
             return bool(
                 self.tenant_id and 
                 self.azure_openai_endpoint and 
-                self.azure_openai_deployment
+                self.azure_openai_deployment and
+                self.blueprint_app_id and
+                self.blueprint_client_secret and
+                self.agent_identity_app_id
             )
 
 
@@ -220,4 +266,3 @@ def get_config() -> Config:
     if _config is None:
         _config = Config()
     return _config
-

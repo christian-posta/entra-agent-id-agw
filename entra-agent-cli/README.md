@@ -140,11 +140,24 @@ python -m agent_cli.main create-new-agent-identity-from-blueprint $AGENT_NAME \
 If you skipped OBO setup during creation, or need to grant additional scopes:
 ```bash
 # Grant default Graph scopes
-python -m agent_cli.main grant-admin-consent "My Agent"
+python -m agent_cli.main grant-admin-consent $AGENT_NAME
 
 # Grant custom scopes
-python -m agent_cli.main grant-admin-consent "My Agent" \
+python -m agent_cli.main grant-admin-consent $AGENT_NAME \
     --scopes "User.Read Mail.Read Calendars.Read"
+
+# To specify consent for a specific resource
+# powershell:
+$cogSp = Get-MgServicePrincipal -Filter "servicePrincipalNames/any(x:x eq 'https://cognitiveservices.azure.com')"
+$cogSp | Select-Object DisplayName, AppId, Id
+Write-Host $cogSp
+
+7d312290-28c8-473c-a0ed-8e53749b6d6d 
+#cli:
+python -m agent_cli.main grant-admin-consent "$AGENT_NAME" \
+    --resource "7d312290-28c8-473c-a0ed-8e53749b6d6d" \
+    --scopes "user_impersonation"
+
 ```
 
 #### Get Access Token for Agent Identity

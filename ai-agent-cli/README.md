@@ -1,13 +1,84 @@
 # AI Agent CLI
 
-An interactive CLI AI agent that uses Azure OpenAI with Microsoft Entra authentication and MCP (Model Context Protocol) tool support.
+An interactive CLI AI agent that uses Azure OpenAI with Microsoft Entra authentication (OBO flows) and MCP (Model Context Protocol) tool support.
 
 ## Features
 
-- **Microsoft Entra Authentication**: Device code flow with persistent token caching
+- **Two Authentication Modes**:
+  - **Test Mode (API Key)**: Quick testing with Azure OpenAI API key
+  - **Production Mode (Entra OBO)**: Full OBO flow with Agent Identity
 - **Azure OpenAI Integration**: Chat with GPT models deployed on Azure
-- **MCP Tool Support**: Connect to remote MCP servers via SSE for tool calling
-- **Interactive Menu**: Easy-to-use command-line interface
+- **MCP Tool Support**: Connect to remote MCP servers via SSE with Bearer token auth
+- **Agent Identity**: OBO tokens carry both agent and user identity for gateway authorization
+
+## Architecture
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                        AUTH MODES                             │
+├───────────────────────────────────────────────────────────────┤
+│  TEST MODE (api_key)         │  PRODUCTION MODE (entra)       │
+│  • Azure OpenAI: API Key     │  • User login → Blueprint      │
+│  • MCP: No auth              │  • Azure OpenAI: OBO token     │
+│  • Quick testing             │  • MCP/Gateway: OBO token      │
+│                              │  • Full audit trail            │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Production Mode Token Flow
+
+```
+1. User login → Tc (aud=Blueprint, scope=access_as_user)
+2. Get T1: Blueprint + fmi_path → T1 (impersonation token)
+3. OBO for Azure OpenAI: Tc + T1 → T2 (aud=cognitiveservices)
+4. OBO for MCP/Gateway: Tc + T1 → T2 (aud=gateway)
+5. Agent uses T2 for Azure OpenAI calls
+6. MCP client passes T2 to Gateway as Bearer token
+
+T2 Token contains:
+  • appid = Agent Identity (which agent is calling)
+  • user claims = Logged in user (on whose behalf)
+```
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: User Login (Device Code Flow)                                       │
+│ ─────────────────────────────────────                                       │
+│ Client: Microsoft Graph PowerShell (14d82eec-...)                           │
+│ Scope:  api://{blueprint_app_id}/access_as_user                             │
+│                     ↓                                                       │
+│ Result: Tc (User Token with Blueprint as audience)                          │
+│         - aud: api://{blueprint}                                            │
+│         - sub: christian.posta@solo.io                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: Get T1 (Blueprint Impersonation Token with fmi_path)                │
+│ ───────────────────────────────────────────────────────────                 │
+│ Client:       Blueprint App ID                                              │
+│ Scope:        api://AzureADTokenExchange/.default                           │
+│ Grant Type:   client_credentials                                            │
+│ fmi_path:     {agent_identity_app_id}  ← THIS MAKES IT AGENT IDENTITY OBO   │
+│                     ↓                                                       │
+│ Result: T1 (Blueprint can impersonate Agent Identity)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: OBO Exchange (Tc + T1 → T2)                                         │
+│ ───────────────────────────────────                                         │
+│ Client:            Agent Identity App ID                                    │
+│ client_assertion:  T1 (proves blueprint can speak for agent)                │
+│ assertion:         Tc (user token - on behalf of THIS user)                 │
+│ Scope:             https://cognitiveservices.azure.com/.default             │
+│ Grant Type:        urn:ietf:params:oauth:grant-type:jwt-bearer              │
+│                     ↓                                                       │
+│ Result: T2 (OBO Token)                                                      │
+│         - aud: https://cognitiveservices.azure.com                          │
+│         - sub: christian.posta@solo.io (USER's identity)                    │
+│         - appid: {agent_identity_app_id} (AGENT's identity)                 │
+│         - Contains BOTH user and agent claims                               │
+└─────────────────────────────────────────────────────────────────────────────┘
 
 ## Installation
 
@@ -28,23 +99,73 @@ Copy `env.example` to `.env` and configure:
 cp env.example .env
 ```
 
-Edit `.env`:
+### Test Mode (API Key)
+
+For quick testing without Entra authentication:
 
 ```bash
-# Microsoft Entra ID Configuration
-TENANT_ID=your-tenant-id-here
+# .env
+AUTH_MODE=api_key
 
-# Azure OpenAI Configuration
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT=gpt-4o
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
-
-# Authentication Mode: "entra" or "api_key"
-AZURE_OPENAI_AUTH_MODE=entra
-
-# API Key (only used if AUTH_MODE=api_key)
-AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_API_KEY=your-api-key
 ```
+
+### Production Mode (Entra OBO)
+
+You may need to give the agent identity the OpenAI User Role:
+
+```bash
+# Get the Agent Identity's Object ID (Service Principal ID)
+AGENT_SP_ID="65027832-f56f-4d8e-93aa-a09113ba2d47"
+RESOURCE_GROUP="your-resource-group"
+AOAI_RESOURCE_NAME="your-openai-resource"
+SUBSCRIPTION_ID="your-subscription-id"
+
+# Assign "Cognitive Services OpenAI User" role to the Agent Identity
+az role assignment create \
+    --assignee "$AGENT_SP_ID" \
+    --role "Cognitive Services OpenAI User" \
+    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AOAI_RESOURCE_NAME"
+
+
+# Assign role to myself
+az role assignment create \
+    --assignee "christian.posta@solo.io" \
+    --role "Cognitive Services OpenAI User" \
+    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AOAI_RESOURCE_NAME"
+```
+
+For full OBO flow with Agent Identity:
+
+```bash
+# .env
+AUTH_MODE=entra
+
+# Microsoft Entra ID
+TENANT_ID=your-tenant-id
+
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=gpt-4o
+
+# Blueprint (parent application for agent identity)
+BLUEPRINT_APP_ID=your-blueprint-client-id
+BLUEPRINT_CLIENT_SECRET=your-blueprint-secret
+
+# Agent Identity (the identity the agent assumes)
+AGENT_IDENTITY_APP_ID=your-agent-identity-client-id
+```
+
+### Prerequisites for Production Mode
+
+1. **Create a Blueprint** with exposed API scope `access_as_user`
+2. **Create an Agent Identity** from the Blueprint
+3. **Grant admin consent** for the Agent Identity to access downstream APIs
+4. User must have permission to authenticate against the Blueprint
+
+See `OBO-GUIDE.md` in the parent directory for detailed setup instructions.
 
 ### Config Files
 
@@ -63,64 +184,57 @@ The CLI uses two config files in your home directory:
 python -m agent_cli.main run
 ```
 
-On first run with Entra authentication, you'll see:
+#### Test Mode Output
 
 ```
-To sign in, use a web browser to open the page https://microsoft.com/devicelogin 
+Starting AI Agent CLI...
+
+Running in TEST MODE (API Key)
+MCP calls will not have authentication.
+
+═══════════════════════════════════════
+           AI Agent CLI
+           Test Mode (API Key)
+═══════════════════════════════════════
+```
+
+#### Production Mode Output
+
+```
+Starting AI Agent CLI...
+
+Running in PRODUCTION MODE (Entra OBO)
+
+Step 1: User Authentication
+To sign in, use a web browser to open https://microsoft.com/devicelogin
 and enter the code XXXXXX to authenticate.
-```
 
-### Interactive Menu
+✓ Logged in as: user@example.com
 
-After login, you'll see:
+Step 2: Initializing OBO Token Manager
+Step 3: Getting OBO token for Azure OpenAI
+✓ T1 token acquired
+✓ OBO token acquired for cognitiveservices
+✓ Azure OpenAI OBO token acquired
 
-```
+✓ Agent initialized with OBO authentication
+
 ═══════════════════════════════════════
            AI Agent CLI
            Logged in as: user@example.com
 ═══════════════════════════════════════
+```
 
+### Interactive Menu
+
+```
 1. Prompt agent
 2. List MCP tools
 3. Add MCP tool server
 4. Remove MCP tool server
 5. Clear conversation history
 6. Exit
-
-Select an option:
 ```
-
-### Menu Options
-
-#### 1. Prompt Agent
-
-Enter an interactive chat session with the AI agent. The agent can use any connected MCP tools to help answer your questions.
-
-Type `exit` or `quit` to return to the menu, or `clear` to reset conversation history.
-
-#### 2. List MCP Tools
-
-Display all available tools from connected MCP servers in a formatted table.
-
-#### 3. Add MCP Tool Server
-
-Add a new MCP server by providing:
-- **Server name**: A friendly name for the server
-- **SSE URL**: The Server-Sent Events endpoint (e.g., `http://localhost:3000/sse`)
-
-The server will be connected immediately and its tools will be available to the agent.
-
-#### 4. Remove MCP Tool Server
-
-Remove a previously configured MCP server.
-
-#### 5. Clear Conversation History
-
-Reset the agent's conversation history while staying in the session.
-
-#### 6. Exit
-
-Exit the CLI application.
 
 ### Other Commands
 
@@ -135,52 +249,75 @@ python -m agent_cli.main logout
 python -m agent_cli.main run --force-refresh
 ```
 
-## Authentication Modes
-
-### Entra ID Authentication (Recommended)
-
-Uses Microsoft Entra ID (Azure AD) for secure authentication:
-1. Set `AZURE_OPENAI_AUTH_MODE=entra`
-2. Configure `TENANT_ID`
-3. On first run, complete device code flow authentication
-4. Token is cached for future use
-
-### API Key Authentication
-
-For simpler setups or testing:
-1. Set `AZURE_OPENAI_AUTH_MODE=api_key`
-2. Set `AZURE_OPENAI_API_KEY` to your Azure OpenAI API key
-
 ## MCP Tool Integration
 
-The agent supports the Model Context Protocol (MCP) for tool calling. Connect to MCP servers that expose tools via SSE (Server-Sent Events).
+### Without Authentication (Test Mode)
 
-When you chat with the agent, it will automatically use available tools when helpful. For example, if you have a filesystem MCP server connected, you can ask the agent to list files, read content, etc.
+In test mode, MCP servers are connected without authentication. Use this for local MCP servers that don't require auth.
+
+### With OBO Authentication (Production Mode)
+
+In production mode, the MCP client automatically includes the OBO token as a Bearer token in all requests to MCP servers. This allows an AI Gateway to:
+
+1. **Validate the Agent Identity** (`appid` claim in T2)
+2. **Validate the User Identity** (`upn`, `name`, `oid` claims in T2)
+3. **Check permissions and scopes** (`scp` claim)
+4. **Maintain audit trail** of which agent did what for which user
+
+### Adding an MCP Server
+
+From the interactive menu, select option 3:
+
+```
+Server name: my-mcp-server
+SSE URL: http://localhost:3000/sse
+
+Connecting to my-mcp-server...
+✓ MCP server 'my-mcp-server' added and connected!
+Found 5 tool(s)
+```
 
 ## Security Notes
 
 - Authentication tokens are cached locally in `~/.ai-agent-cli-tokens.json`
 - MCP server configurations are stored in `~/.ai-agent-cli.json`
+- Blueprint client secrets should be protected (use environment variables, not config files)
 - Use `logout` command to clear cached tokens
-- Protect these files appropriately on shared systems
+- In production, the OBO token provides a complete audit trail
 
-## Architecture
+## Module Structure
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       AI Agent CLI                          │
-├─────────────────────────────────────────────────────────────┤
-│  main.py          - Interactive menu & CLI commands         │
-│  auth.py          - Microsoft Entra device code flow        │
-│  config.py        - Configuration management                │
-│  agent.py         - Azure OpenAI chat & tool calling        │
-│  mcp_client.py    - MCP SSE client for tools                │
-│  models.py        - Data classes                            │
-└─────────────────────────────────────────────────────────────┘
-          │                    │                    │
-          ▼                    ▼                    ▼
-    ┌──────────┐        ┌───────────┐        ┌──────────┐
-    │  Entra   │        │   Azure   │        │   MCP    │
-    │   ID     │        │  OpenAI   │        │ Servers  │
-    └──────────┘        └───────────┘        └──────────┘
+ai-agent-cli/
+├── agent_cli/
+│   ├── __init__.py
+│   ├── main.py          # CLI entry point & interactive menu
+│   ├── auth.py          # Device code flow & OBO token exchange
+│   ├── config.py        # Configuration management
+│   ├── models.py        # Data classes
+│   ├── agent.py         # Azure OpenAI agent with tool calling
+│   └── mcp_client.py    # MCP SSE client with Bearer auth
+├── env.example
+├── requirements.txt
+└── README.md
 ```
+
+## Troubleshooting
+
+### "OBO exchange failed: AADSTS65001"
+
+**Cause**: Admin consent not granted for the Agent Identity.
+
+**Solution**: Grant admin consent for the Agent Identity to access the required resources. See `OBO-GUIDE.md` for instructions.
+
+### "T1 token request failed"
+
+**Cause**: Invalid Blueprint credentials or configuration.
+
+**Solution**: Verify `BLUEPRINT_APP_ID` and `BLUEPRINT_CLIENT_SECRET` are correct.
+
+### "Failed to connect to MCP server: Unauthorized"
+
+**Cause**: MCP server/gateway rejected the Bearer token.
+
+**Solution**: Ensure the gateway is configured to accept tokens from the Agent Identity.
