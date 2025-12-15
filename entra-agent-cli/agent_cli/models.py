@@ -26,6 +26,18 @@ class AgentIdentityInfo:
 
 
 @dataclass
+class MCPServerAppInfo:
+    """Information about an MCP Server app registration."""
+    
+    app_id: str
+    object_id: str
+    service_principal_id: str
+    client_secret: str
+    display_name: str
+    api_scope: str = ""  # e.g., api://{app_id}/access_as_user
+
+
+@dataclass
 class TokenResult:
     """Result of a token acquisition."""
     

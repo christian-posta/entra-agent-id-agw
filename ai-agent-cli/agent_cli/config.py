@@ -45,6 +45,9 @@ class Config:
         self._blueprint_app_id_env = os.getenv("BLUEPRINT_APP_ID")
         self._blueprint_client_secret_env = os.getenv("BLUEPRINT_CLIENT_SECRET")
         self._agent_identity_app_id_env = os.getenv("AGENT_IDENTITY_APP_ID")
+        
+        # MCP Server for OBO tokens (audience for MCP/Gateway calls)
+        self._mcp_server_app_id_env = os.getenv("MCP_SERVER_APP_ID")
     
     def _load_config(self) -> None:
         """Load configuration from file."""
@@ -177,6 +180,22 @@ class Config:
     def agent_identity_app_id(self, value: str) -> None:
         """Set Agent Identity application ID in config."""
         self._data["agent_identity_app_id"] = value
+        self._save_config()
+    
+    # MCP Server App ID (for OBO tokens to MCP/Gateway)
+    @property
+    def mcp_server_app_id(self) -> Optional[str]:
+        """Get MCP Server application ID from config or environment.
+        
+        This is used as the audience for OBO tokens when calling
+        MCP servers via the AI Gateway.
+        """
+        return self._data.get("mcp_server_app_id") or self._mcp_server_app_id_env
+    
+    @mcp_server_app_id.setter
+    def mcp_server_app_id(self, value: str) -> None:
+        """Set MCP Server application ID in config."""
+        self._data["mcp_server_app_id"] = value
         self._save_config()
     
     # MCP Servers

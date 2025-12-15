@@ -6,7 +6,7 @@ from typing import Optional
 import httpx
 from rich.console import Console
 
-from .models import BlueprintInfo, AgentIdentityInfo
+from .models import BlueprintInfo, AgentIdentityInfo, MCPServerAppInfo
 
 
 console = Console()
@@ -64,6 +64,9 @@ class GraphClient:
             
             if response.status_code in (200, 201):
                 return True, response.json()
+            elif response.status_code == 204:
+                # No content - success for PATCH/DELETE operations
+                return True, {}
             else:
                 try:
                     error_data = response.json()
@@ -304,6 +307,8 @@ class GraphClient:
         object_id: str,
         app_id: str,
         scope_name: str = "access_as_user",
+        max_retries: int = 3,
+        retry_delay: int = 5,
     ) -> bool:
         """Expose an API on an application with a delegated permission scope.
         
@@ -314,6 +319,8 @@ class GraphClient:
             object_id: Application object ID
             app_id: Application (client) ID
             scope_name: Name of the scope to add (default: access_as_user)
+            max_retries: Number of retries if the request fails (default: 3)
+            retry_delay: Seconds to wait between retries (default: 5)
             
         Returns:
             True if successful, False otherwise
@@ -342,16 +349,29 @@ class GraphClient:
             }
         }
         
-        success, data = self._request(
-            "PATCH",
-            f"{GRAPH_BETA_URL}/applications/{object_id}",
-            json_data=body,
-        )
+        # Retry logic for Azure AD propagation delays
+        for attempt in range(max_retries):
+            success, data = self._request(
+                "PATCH",
+                f"{GRAPH_BETA_URL}/applications/{object_id}",
+                json_data=body,
+            )
+            
+            if success:
+                return True
+            
+            # Check if it's a propagation/timing issue (typically shows as empty error or 404)
+            error_msg = str(data.get("error", {}).get("message", ""))
+            error_code = data.get("error", {}).get("code", "")
+            
+            if attempt < max_retries - 1:
+                console.print(f"[yellow]Attempt {attempt + 1} failed, retrying in {retry_delay}s...[/yellow]")
+                if error_msg:
+                    console.print(f"[dim]  Error: {error_msg}[/dim]")
+                time.sleep(retry_delay)
+            else:
+                console.print(f"[red]Failed to expose API after {max_retries} attempts: {data}[/red]")
         
-        if success:
-            return True
-        
-        console.print(f"[red]Failed to expose API: {data}[/red]")
         return False
     
     def get_service_principal_by_app_id(self, app_id: str) -> Optional[dict]:
@@ -417,6 +437,173 @@ class GraphClient:
         
         console.print(f"[red]Failed to grant admin consent: {data}[/red]")
         return False
+    
+    def create_application(
+        self,
+        display_name: str,
+        sign_in_audience: str = "AzureADMyOrg",
+    ) -> Optional[dict]:
+        """Create a new application registration.
+        
+        Args:
+            display_name: Name for the application
+            sign_in_audience: Supported account types (default: single tenant)
+            
+        Returns:
+            Created application dict or None
+        """
+        body = {
+            "displayName": display_name,
+            "signInAudience": sign_in_audience,
+        }
+        
+        success, data = self._request(
+            "POST",
+            f"{GRAPH_V1_URL}/applications",
+            json_data=body,
+        )
+        
+        if success:
+            return data
+        
+        console.print(f"[red]Failed to create application: {data}[/red]")
+        return None
+    
+    def create_service_principal(self, app_id: str) -> Optional[dict]:
+        """Create a service principal for an application.
+        
+        Args:
+            app_id: Application (client) ID
+            
+        Returns:
+            Created service principal dict or None
+        """
+        body = {
+            "appId": app_id,
+        }
+        
+        success, data = self._request(
+            "POST",
+            f"{GRAPH_V1_URL}/servicePrincipals",
+            json_data=body,
+        )
+        
+        if success:
+            return data
+        
+        # Check if already exists
+        error = data.get("error", {})
+        if "already exists" in str(error.get("message", "")).lower():
+            console.print("[yellow]Service principal already exists, looking it up...[/yellow]")
+            return self.get_service_principal_by_app_id(app_id)
+        
+        console.print(f"[red]Failed to create service principal: {data}[/red]")
+        return None
+    
+    def add_required_resource_access(
+        self,
+        app_object_id: str,
+        resource_app_id: str,
+        delegated_permission_ids: list[str],
+    ) -> bool:
+        """Add required resource access (API permissions) to an application.
+        
+        Args:
+            app_object_id: Application object ID
+            resource_app_id: Resource application ID (e.g., Microsoft Graph)
+            delegated_permission_ids: List of permission (scope) IDs to add
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Build the resource access array
+        resource_access = [
+            {"id": perm_id, "type": "Scope"}
+            for perm_id in delegated_permission_ids
+        ]
+        
+        body = {
+            "requiredResourceAccess": [
+                {
+                    "resourceAppId": resource_app_id,
+                    "resourceAccess": resource_access,
+                }
+            ]
+        }
+        
+        success, data = self._request(
+            "PATCH",
+            f"{GRAPH_V1_URL}/applications/{app_object_id}",
+            json_data=body,
+        )
+        
+        if success:
+            return True
+        
+        console.print(f"[red]Failed to add required resource access: {data}[/red]")
+        return False
+    
+    def configure_agent_identity_optional_claims(self, app_object_id: str) -> bool:
+        """Configure optional claims for Agent Identity tokens.
+        
+        Adds the xms_* claims that identify the token as coming from an Agent Identity:
+        - xms_act_fct: Actor facet claim (value 11 = AgentIdentity)
+        - xms_sub_fct: Subject facet claim
+        - xms_par_app_azp: Parent application of the authorized party
+        - xms_idrel: Identity relationship claim
+        
+        Args:
+            app_object_id: Application object ID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        body = {
+            "optionalClaims": {
+                "accessToken": [
+                    {"name": "xms_act_fct", "essential": False},
+                    {"name": "xms_sub_fct", "essential": False},
+                    {"name": "xms_par_app_azp", "essential": False},
+                    {"name": "xms_idrel", "essential": False},
+                    {"name": "xms_tnt_fct", "essential": False},
+                ]
+            }
+        }
+        
+        success, data = self._request(
+            "PATCH",
+            f"{GRAPH_V1_URL}/applications/{app_object_id}",
+            json_data=body,
+        )
+        
+        if success:
+            return True
+        
+        console.print(f"[red]Failed to configure optional claims: {data}[/red]")
+        return False
+
+    def get_graph_delegated_permission_id(self, permission_name: str) -> Optional[str]:
+        """Get the ID of a Microsoft Graph delegated permission by name.
+        
+        Args:
+            permission_name: Permission name (e.g., "User.Read")
+            
+        Returns:
+            Permission ID or None
+        """
+        # Get Microsoft Graph service principal
+        graph_sp = self.get_service_principal_by_app_id(MICROSOFT_GRAPH_APP_ID)
+        if not graph_sp:
+            return None
+        
+        # Search for the permission in oauth2PermissionScopes
+        scopes = graph_sp.get("oauth2PermissionScopes", [])
+        for scope in scopes:
+            if scope.get("value") == permission_name:
+                return scope.get("id")
+        
+        console.print(f"[yellow]Permission '{permission_name}' not found in Microsoft Graph[/yellow]")
+        return None
 
 
 def create_full_blueprint(
@@ -602,6 +789,192 @@ def grant_agent_admin_consent(
     console.print(f"[bold blue]Granting admin consent for scopes: {scopes}...[/bold blue]")
     if client.grant_admin_consent(agent_sp_id, resource_sp_id, scopes):
         console.print(f"[green]✓ Admin consent granted![/green]")
+        return True
+    
+    return False
+
+
+def create_mcp_server_app(
+    access_token: str,
+    display_name: str,
+    graph_permissions: list[str],
+) -> Optional[MCPServerAppInfo]:
+    """Create an MCP Server app registration with exposed API and Graph permissions.
+    
+    This performs the full creation flow:
+    1. Create application registration
+    2. Expose API with access_as_user scope
+    3. Wait for Azure AD propagation
+    4. Create service principal
+    5. Configure Agent Identity optional claims (xms_act_fct, xms_sub_fct, etc.)
+    6. Add client secret
+    7. Add Microsoft Graph delegated permissions
+    8. Grant admin consent for Graph permissions
+    
+    Args:
+        access_token: User access token with required permissions
+        display_name: Name for the MCP server app
+        graph_permissions: List of Microsoft Graph permissions (e.g., ["User.Read"])
+        
+    Returns:
+        MCPServerAppInfo with all details or None
+    """
+    client = GraphClient(access_token)
+    
+    # Step 1: Create application
+    console.print(f"[bold blue]Creating application '{display_name}'...[/bold blue]")
+    app = client.create_application(display_name)
+    if not app:
+        return None
+    
+    app_id = app["appId"]
+    object_id = app["id"]
+    console.print(f"[green]✓ Application created![/green]")
+    console.print(f"  App ID: {app_id}")
+    console.print(f"  Object ID: {object_id}")
+    
+    # Wait for Azure AD propagation before modifying the app
+    # Azure AD can take 5-15 seconds to propagate new applications
+    console.print("[bold blue]Waiting for Azure AD propagation (8 seconds)...[/bold blue]")
+    time.sleep(8)
+    
+    # Step 2: Expose API with access_as_user scope
+    console.print("[bold blue]Exposing API for OBO flows (with retry)...[/bold blue]")
+    if client.expose_api(object_id, app_id, "access_as_user"):
+        api_scope = f"api://{app_id}/access_as_user"
+        console.print(f"[green]✓ API exposed![/green]")
+        console.print(f"  App ID URI: api://{app_id}")
+        console.print(f"  Scope: {api_scope}")
+    else:
+        console.print("[red]Failed to expose API[/red]")
+        return None
+    
+    # Step 3: Wait for propagation
+    console.print("[bold blue]Waiting for Azure AD propagation (3 seconds)...[/bold blue]")
+    time.sleep(3)
+    
+    # Step 4: Create service principal
+    console.print("[bold blue]Creating service principal...[/bold blue]")
+    sp = client.create_service_principal(app_id)
+    if not sp:
+        return None
+    
+    sp_id = sp["id"]
+    console.print(f"[green]✓ Service principal created![/green]")
+    console.print(f"  Service Principal ID: {sp_id}")
+    
+    # Step 5: Configure Agent Identity optional claims
+    console.print("[bold blue]Configuring Agent Identity optional claims...[/bold blue]")
+    if client.configure_agent_identity_optional_claims(object_id):
+        console.print("[green]✓ Optional claims configured![/green]")
+        console.print("  [dim]xms_act_fct, xms_sub_fct, xms_par_app_azp, xms_idrel, xms_tnt_fct[/dim]")
+    else:
+        console.print("[yellow]Warning: Failed to configure optional claims[/yellow]")
+        console.print("[yellow]You can manually add them in Azure Portal → Token configuration[/yellow]")
+    
+    # Step 6: Add client secret
+    console.print("[bold blue]Adding client secret...[/bold blue]")
+    secret = client.add_client_secret(object_id, f"{display_name} OBO Secret")
+    if not secret:
+        console.print("[red]Failed to add client secret![/red]")
+        return None
+    
+    console.print("[green]✓ Client secret created![/green]")
+    console.print(f"[yellow]  Secret: {secret}[/yellow]")
+    console.print("[yellow]  (Save this! You won't see it again)[/yellow]")
+    
+    # Step 7: Add Microsoft Graph delegated permissions
+    if graph_permissions:
+        console.print(f"[bold blue]Adding Microsoft Graph permissions: {', '.join(graph_permissions)}...[/bold blue]")
+        
+        # Get permission IDs
+        permission_ids = []
+        for perm_name in graph_permissions:
+            perm_id = client.get_graph_delegated_permission_id(perm_name)
+            if perm_id:
+                permission_ids.append(perm_id)
+                console.print(f"  [dim]Found permission ID for {perm_name}: {perm_id}[/dim]")
+            else:
+                console.print(f"[yellow]Warning: Could not find permission '{perm_name}'[/yellow]")
+        
+        if permission_ids:
+            if client.add_required_resource_access(object_id, MICROSOFT_GRAPH_APP_ID, permission_ids):
+                console.print("[green]✓ Graph permissions added to app registration![/green]")
+            else:
+                console.print("[yellow]Warning: Failed to add Graph permissions[/yellow]")
+        
+        # Step 8: Grant admin consent for Graph permissions
+        console.print("[bold blue]Granting admin consent for Microsoft Graph...[/bold blue]")
+        
+        # Get Microsoft Graph SP
+        graph_sp = client.get_service_principal_by_app_id(MICROSOFT_GRAPH_APP_ID)
+        if graph_sp:
+            scopes = " ".join(graph_permissions)
+            if client.grant_admin_consent(sp_id, graph_sp["id"], scopes):
+                console.print(f"[green]✓ Admin consent granted for: {scopes}[/green]")
+            else:
+                console.print("[yellow]Warning: Failed to grant admin consent for Graph[/yellow]")
+                console.print("[yellow]You may need to grant consent manually in Azure Portal[/yellow]")
+    
+    return MCPServerAppInfo(
+        app_id=app_id,
+        object_id=object_id,
+        service_principal_id=sp_id,
+        client_secret=secret,
+        display_name=display_name,
+        api_scope=api_scope,
+    )
+
+
+def grant_agent_permission_to_mcp(
+    access_token: str,
+    agent_identity_app_id: str,
+    mcp_server_app_id: str,
+    scope: str = "access_as_user",
+) -> bool:
+    """Grant an Agent Identity permission to call the MCP Server API.
+    
+    This creates an OAuth2PermissionGrant that allows the Agent Identity
+    to request tokens for the MCP Server's exposed API.
+    
+    Args:
+        access_token: User access token with DelegatedPermissionGrant.ReadWrite.All
+        agent_identity_app_id: Agent identity's application ID
+        mcp_server_app_id: MCP Server's application ID
+        scope: Scope to grant (default: access_as_user)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    client = GraphClient(access_token)
+    
+    # Get the agent identity's service principal ID
+    console.print("[bold blue]Looking up Agent Identity service principal...[/bold blue]")
+    agent_sp = client.get_service_principal_by_app_id(agent_identity_app_id)
+    if not agent_sp:
+        console.print(f"[red]Agent Identity not found for app ID: {agent_identity_app_id}[/red]")
+        return False
+    
+    agent_sp_id = agent_sp["id"]
+    agent_name = agent_sp.get("displayName", agent_identity_app_id)
+    console.print(f"[green]✓ Agent Identity: {agent_name} (SP ID: {agent_sp_id})[/green]")
+    
+    # Get the MCP Server's service principal ID
+    console.print("[bold blue]Looking up MCP Server service principal...[/bold blue]")
+    mcp_sp = client.get_service_principal_by_app_id(mcp_server_app_id)
+    if not mcp_sp:
+        console.print(f"[red]MCP Server not found for app ID: {mcp_server_app_id}[/red]")
+        return False
+    
+    mcp_sp_id = mcp_sp["id"]
+    mcp_name = mcp_sp.get("displayName", mcp_server_app_id)
+    console.print(f"[green]✓ MCP Server: {mcp_name} (SP ID: {mcp_sp_id})[/green]")
+    
+    # Grant the permission
+    console.print(f"[bold blue]Granting permission for scope: {scope}...[/bold blue]")
+    if client.grant_admin_consent(agent_sp_id, mcp_sp_id, scope):
+        console.print(f"[green]✓ Agent Identity can now call MCP Server API![/green]")
+        console.print(f"[dim]  {agent_name} → api://{mcp_server_app_id}/{scope}[/dim]")
         return True
     
     return False

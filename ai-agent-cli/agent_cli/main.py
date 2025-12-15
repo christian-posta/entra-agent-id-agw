@@ -2,11 +2,15 @@
 
 from typing import Optional
 
+import json
+
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.syntax import Syntax
 
 from .auth import (
     get_user_token_for_blueprint,
@@ -357,18 +361,36 @@ def run(
         
         console.print("[green]✓ Azure OpenAI OBO token acquired[/green]\n")
         
-        # Step 4: Create MCP manager with OBO token provider
+        # Step 4: Get OBO token for MCP Server (if configured)
+        mcp_token = None
+        if config.mcp_server_app_id:
+            console.print("[bold]Step 4: Getting OBO token for MCP Server[/bold]")
+            console.print(f"[dim]MCP Server App ID: {config.mcp_server_app_id}[/dim]")
+            
+            mcp_scope = f"api://{config.mcp_server_app_id}/.default"
+            mcp_token = obo_manager.get_token_for_scope(mcp_scope)
+            
+            if mcp_token:
+                console.print("[green]✓ MCP Server OBO token acquired[/green]\n")
+            else:
+                console.print("[yellow]Warning: Could not get MCP Server OBO token.[/yellow]")
+                console.print("[yellow]MCP calls will not have authentication.[/yellow]\n")
+        else:
+            console.print("[dim]Step 4: No MCP_SERVER_APP_ID configured, MCP calls will not have OBO tokens[/dim]\n")
+        
+        # Step 5: Create MCP manager with OBO token provider
         # The token provider returns the access token string for MCP gateway authentication
         def mcp_token_provider() -> Optional[str]:
-            # For MCP, we can use the same Azure OpenAI token or get a specific gateway token
-            # Here we'll use a generic approach - MCP servers in this flow receive the OBO token
-            token = obo_manager.get_azure_openai_token()
+            if not config.mcp_server_app_id:
+                return None
+            mcp_scope = f"api://{config.mcp_server_app_id}/.default"
+            token = obo_manager.get_token_for_scope(mcp_scope)
             return token.access_token if token else None
         
         mcp_manager = MCPManager(token_provider=mcp_token_provider)
         connect_saved_mcp_servers(mcp_manager)
         
-        # Step 5: Create agent with OBO token
+        # Step 6: Create agent with OBO token
         agent = create_agent_with_obo_token(
             endpoint=endpoint,
             deployment=deployment,
@@ -432,6 +454,7 @@ def config_show() -> None:
     table.add_row("Blueprint App ID", config.blueprint_app_id or "[dim]Not set[/dim]")
     table.add_row("Blueprint Secret", "[green]Set[/green]" if config.blueprint_client_secret else "[dim]Not set[/dim]")
     table.add_row("Agent Identity App ID", config.agent_identity_app_id or "[dim]Not set[/dim]")
+    table.add_row("MCP Server App ID", config.mcp_server_app_id or "[dim]Not set[/dim]")
     table.add_row("", "")
     
     # Azure OpenAI settings
@@ -453,6 +476,174 @@ def config_show() -> None:
     else:
         console.print("\n[dim]No MCP servers configured.[/dim]")
     
+    console.print()
+
+
+def display_token(title: str, token: TokenResult, color: str = "blue") -> None:
+    """Display a token with its decoded claims.
+    
+    Args:
+        title: Title for the token panel
+        token: TokenResult to display
+        color: Border color for the panel
+    """
+    claims = token.decoded_claims()
+    claims_json = json.dumps(claims, indent=2)
+    syntax = Syntax(claims_json, "json", theme="monokai", line_numbers=False)
+    console.print(Panel(syntax, title=f"[bold]{title}[/bold]", border_style=color))
+
+
+@app.command()
+def show_tokens(
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication"),
+    output_raw: bool = typer.Option(False, "--output-raw", "-r", help="Also output raw token strings"),
+) -> None:
+    """Show all OBO tokens (Tc, T2 for OpenAI, T2 for MCP Server).
+    
+    This command authenticates and displays all the tokens in the OBO flow
+    with their decoded claims. Useful for debugging and understanding the token flow.
+    
+    Tokens displayed:
+    - Tc: User token with Blueprint as audience
+    - T2 (Azure OpenAI): OBO token for Azure Cognitive Services
+    - T2 (MCP Server): OBO token for MCP Server (if configured)
+    """
+    config = get_config()
+    
+    if config.auth_mode == "api_key":
+        console.print("[yellow]Token display is only available in Entra mode (AUTH_MODE=entra).[/yellow]")
+        console.print("[dim]In API key mode, no OBO tokens are used.[/dim]")
+        raise typer.Exit(0)
+    
+    # Check configuration
+    if not config.tenant_id or not config.blueprint_app_id:
+        console.print("[red]Error: Entra configuration incomplete.[/red]")
+        console.print("Required: TENANT_ID, BLUEPRINT_APP_ID, BLUEPRINT_CLIENT_SECRET, AGENT_IDENTITY_APP_ID")
+        raise typer.Exit(1)
+    
+    console.print("\n[bold]OBO Token Flow - Token Display[/bold]\n")
+    
+    # Step 1: Get user token (Tc)
+    console.print("[bold blue]Step 1: Getting user token (Tc)...[/bold blue]")
+    console.print(f"[dim]Scope: api://{config.blueprint_app_id}/access_as_user[/dim]")
+    
+    tc_token = get_user_token_for_blueprint(
+        tenant_id=config.tenant_id,
+        blueprint_app_id=config.blueprint_app_id,
+        force_refresh=force_refresh,
+    )
+    
+    if not tc_token:
+        console.print("[red]Failed to get user token (Tc).[/red]")
+        raise typer.Exit(1)
+    
+    console.print("[green]✓ Got Tc token[/green]\n")
+    
+    # Display Tc token
+    display_token("Tc Token (User token, aud=Blueprint)", tc_token, "cyan")
+    
+    if output_raw:
+        console.print(f"\n[dim]Raw Tc token:[/dim]")
+        console.print(f"[dim]{tc_token.access_token[:50]}...{tc_token.access_token[-20:]}[/dim]\n")
+    
+    # Step 2: Create OBO manager and get tokens
+    console.print("[bold blue]Step 2: Creating OBO Token Manager...[/bold blue]")
+    
+    obo_manager = OBOTokenManager(
+        tenant_id=config.tenant_id,
+        blueprint_app_id=config.blueprint_app_id,
+        blueprint_client_secret=config.blueprint_client_secret,
+        agent_identity_app_id=config.agent_identity_app_id,
+        user_token=tc_token.access_token,
+    )
+    
+    # Step 3: Get T2 for Azure OpenAI
+    console.print("\n[bold blue]Step 3: Getting T2 for Azure OpenAI...[/bold blue]")
+    console.print(f"[dim]Scope: {AZURE_COGNITIVE_SERVICES_SCOPE}[/dim]")
+    
+    aoai_token = obo_manager.get_azure_openai_token()
+    
+    if aoai_token:
+        console.print("[green]✓ Got T2 for Azure OpenAI[/green]\n")
+        display_token("T2 Token (Azure OpenAI, aud=cognitiveservices)", aoai_token, "green")
+        
+        if output_raw:
+            console.print(f"\n[dim]Raw Azure OpenAI T2 token:[/dim]")
+            console.print(f"[dim]{aoai_token.access_token[:50]}...{aoai_token.access_token[-20:]}[/dim]\n")
+    else:
+        console.print("[red]✗ Failed to get T2 for Azure OpenAI[/red]")
+        console.print("[yellow]Hint: Ensure admin consent is granted for the Agent Identity.[/yellow]\n")
+    
+    # Step 4: Get T2 for MCP Server (if configured)
+    if config.mcp_server_app_id:
+        console.print("[bold blue]Step 4: Getting T2 for MCP Server...[/bold blue]")
+        mcp_scope = f"api://{config.mcp_server_app_id}/.default"
+        console.print(f"[dim]Scope: {mcp_scope}[/dim]")
+        
+        mcp_token = obo_manager.get_token_for_scope(mcp_scope)
+        
+        if mcp_token:
+            console.print("[green]✓ Got T2 for MCP Server[/green]\n")
+            display_token("T2 Token (MCP Server, aud=MCP_SERVER_APP_ID)", mcp_token, "magenta")
+            
+            if output_raw:
+                console.print(f"\n[dim]Raw MCP Server T2 token:[/dim]")
+                console.print(f"[dim]{mcp_token.access_token[:50]}...{mcp_token.access_token[-20:]}[/dim]\n")
+        else:
+            console.print("[red]✗ Failed to get T2 for MCP Server[/red]")
+            console.print("[yellow]Hint: Ensure the Agent Identity has permission to call the MCP Server.[/yellow]\n")
+    else:
+        console.print("[dim]Step 4: Skipped - MCP_SERVER_APP_ID not configured[/dim]\n")
+    
+    # Summary
+    console.print("[bold]Token Summary[/bold]")
+    table = Table(show_header=True)
+    table.add_column("Token", style="cyan")
+    table.add_column("Audience (aud)", style="white")
+    table.add_column("Subject (sub)", style="white")
+    table.add_column("App ID (appid)", style="white")
+    table.add_column("Status", style="white")
+    
+    # Tc
+    tc_claims = tc_token.decoded_claims()
+    table.add_row(
+        "Tc (User)",
+        tc_claims.get("aud", "N/A")[:40] + "..." if len(str(tc_claims.get("aud", ""))) > 40 else tc_claims.get("aud", "N/A"),
+        tc_claims.get("upn", tc_claims.get("sub", "N/A")),
+        tc_claims.get("appid", tc_claims.get("azp", "N/A")),
+        "[green]✓[/green]",
+    )
+    
+    # T2 OpenAI
+    if aoai_token:
+        aoai_claims = aoai_token.decoded_claims()
+        table.add_row(
+            "T2 (Azure OpenAI)",
+            aoai_claims.get("aud", "N/A")[:40] + "..." if len(str(aoai_claims.get("aud", ""))) > 40 else aoai_claims.get("aud", "N/A"),
+            aoai_claims.get("upn", aoai_claims.get("sub", "N/A")),
+            aoai_claims.get("appid", "N/A"),
+            "[green]✓[/green]",
+        )
+    else:
+        table.add_row("T2 (Azure OpenAI)", "-", "-", "-", "[red]✗[/red]")
+    
+    # T2 MCP
+    if config.mcp_server_app_id:
+        if mcp_token:
+            mcp_claims = mcp_token.decoded_claims()
+            table.add_row(
+                "T2 (MCP Server)",
+                mcp_claims.get("aud", "N/A")[:40] + "..." if len(str(mcp_claims.get("aud", ""))) > 40 else mcp_claims.get("aud", "N/A"),
+                mcp_claims.get("upn", mcp_claims.get("sub", "N/A")),
+                mcp_claims.get("appid", "N/A"),
+                "[green]✓[/green]",
+            )
+        else:
+            table.add_row("T2 (MCP Server)", "-", "-", "-", "[red]✗[/red]")
+    else:
+        table.add_row("T2 (MCP Server)", "[dim]Not configured[/dim]", "-", "-", "[dim]-[/dim]")
+    
+    console.print(table)
     console.print()
 
 

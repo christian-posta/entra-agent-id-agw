@@ -26,6 +26,8 @@ from .graph_client import (
     create_full_blueprint,
     create_agent_identity_from_blueprint,
     grant_agent_admin_consent,
+    create_mcp_server_app,
+    grant_agent_permission_to_mcp,
     MICROSOFT_GRAPH_APP_ID,
     DEFAULT_OBO_SCOPES,
 )
@@ -609,6 +611,206 @@ def grant_consent(
         console.print(f"The agent '{agent_name}' can now perform OBO flows to access the resource.")
     else:
         console.print("\n[red]Failed to grant admin consent.[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("create-mcp-server-app")
+def create_mcp_server_app_cmd(
+    name: str = typer.Argument(..., help="Display name for the MCP Server app"),
+    agent_name: Optional[str] = typer.Option(None, "--agent-name", "-a", help="Agent Identity name to grant access"),
+    graph_permissions: str = typer.Option("User.Read", "--graph-permissions", "-g", help="Microsoft Graph permissions (comma-separated)"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication"),
+) -> None:
+    """Create an MCP Server app registration for OBO flows.
+    
+    This creates an application that can:
+    1. Receive OBO tokens from AI Agents (via AI Gateway)
+    2. Perform OBO exchange to call Microsoft Graph on behalf of users
+    
+    The created app will have:
+    - Exposed API with 'access_as_user' scope
+    - Client secret for OBO to Microsoft Graph
+    - Delegated permissions for specified Graph scopes
+    
+    If --agent-name is provided, also grants that Agent Identity
+    permission to call the MCP Server API.
+    
+    Example:
+        python -m agent_cli.main create-mcp-server-app "MCP Tool Server" \\
+            --agent-name "Interactive Agent" \\
+            --graph-permissions "User.Read,Mail.Read"
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Parse graph permissions
+    permissions_list = [p.strip() for p in graph_permissions.split(",") if p.strip()]
+    
+    console.print(f"\n[bold]Creating MCP Server App: {name}[/bold]")
+    console.print(f"Graph permissions: {', '.join(permissions_list)}")
+    if agent_name:
+        console.print(f"Will grant access to Agent: {agent_name}")
+    console.print()
+    
+    # Authenticate
+    console.print("[bold blue]Step 1: Authenticate with device code flow[/bold blue]")
+    required_scopes = [
+        "Application.ReadWrite.All",
+        "DelegatedPermissionGrant.ReadWrite.All",
+    ]
+    token = get_device_code_token(tid, scopes=required_scopes, force_refresh=force_refresh)
+    if not token:
+        raise typer.Exit(1)
+    
+    console.print("[green]✓ Authentication successful[/green]\n")
+    
+    # Create the MCP server app
+    console.print("[bold blue]Step 2: Create MCP Server app registration[/bold blue]")
+    mcp_app = create_mcp_server_app(
+        access_token=token.access_token,
+        display_name=name,
+        graph_permissions=permissions_list,
+    )
+    
+    if not mcp_app:
+        console.print("[red]Failed to create MCP Server app.[/red]")
+        raise typer.Exit(1)
+    
+    # Grant Agent Identity permission if specified
+    if agent_name:
+        console.print(f"\n[bold blue]Step 3: Grant Agent Identity permission[/bold blue]")
+        
+        agent = config.get_agent_identity(agent_name)
+        if not agent:
+            console.print(f"[yellow]Warning: Agent '{agent_name}' not found in local config.[/yellow]")
+            console.print("[yellow]You can manually grant permission later using 'grant-agent-mcp-permission'.[/yellow]")
+        else:
+            if grant_agent_permission_to_mcp(
+                access_token=token.access_token,
+                agent_identity_app_id=agent.app_id,
+                mcp_server_app_id=mcp_app.app_id,
+            ):
+                console.print(f"[green]✓ Agent '{agent_name}' can now call MCP Server API[/green]")
+            else:
+                console.print("[yellow]Warning: Failed to grant Agent permission.[/yellow]")
+    
+    # Display results
+    console.print(f"\n[bold green]MCP Server App '{name}' created successfully![/bold green]\n")
+    console.print("[bold]Configuration for your MCP Server:[/bold]")
+    console.print(f"  MCP_CLIENT_ID={mcp_app.app_id}")
+    console.print(f"  MCP_CLIENT_SECRET={mcp_app.client_secret}")
+    console.print(f"  TENANT_ID={tid}")
+    console.print()
+    console.print("[bold]API Scope (for AI Agent to request tokens):[/bold]")
+    console.print(f"  {mcp_app.api_scope}")
+    console.print()
+    console.print("[bold]Configuration for ai-agent-cli (.env):[/bold]")
+    console.print(f"  MCP_SERVER_APP_ID={mcp_app.app_id}")
+
+
+@app.command("grant-agent-mcp-permission")
+def grant_agent_mcp_permission_cmd(
+    agent_name: str = typer.Argument(..., help="Name of the Agent Identity"),
+    mcp_app_id: str = typer.Argument(..., help="MCP Server application ID"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+) -> None:
+    """Grant an Agent Identity permission to call an MCP Server API.
+    
+    This is needed so the Agent Identity can request OBO tokens
+    with the MCP Server as the audience.
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Get agent identity
+    agent = config.get_agent_identity(agent_name)
+    if not agent:
+        console.print(f"[red]Agent identity '{agent_name}' not found in local config.[/red]")
+        raise typer.Exit(1)
+    
+    console.print(f"\n[bold]Granting MCP Permission[/bold]")
+    console.print(f"Agent: {agent_name} ({agent.app_id})")
+    console.print(f"MCP Server: {mcp_app_id}\n")
+    
+    # Authenticate
+    token = get_device_code_token(
+        tid,
+        scopes=["DelegatedPermissionGrant.ReadWrite.All", "Application.Read.All"]
+    )
+    if not token:
+        raise typer.Exit(1)
+    
+    # Grant permission
+    if grant_agent_permission_to_mcp(
+        access_token=token.access_token,
+        agent_identity_app_id=agent.app_id,
+        mcp_server_app_id=mcp_app_id,
+    ):
+        console.print(f"\n[bold green]✓ Permission granted successfully![/bold green]")
+    else:
+        console.print("\n[red]Failed to grant permission.[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("configure-agent-claims")
+def configure_agent_claims_cmd(
+    app_id: str = typer.Argument(..., help="Application ID of the MCP Server or API app"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+) -> None:
+    """Configure Agent Identity optional claims on an existing app registration.
+    
+    This adds the xms_* claims that identify tokens as coming from Agent Identities:
+    - xms_act_fct: Actor facet (11 = AgentIdentity)
+    - xms_sub_fct: Subject facet
+    - xms_par_app_azp: Parent application (Blueprint)
+    - xms_idrel: Identity relationship
+    - xms_tnt_fct: Tenant facet
+    
+    Use this if you created an MCP Server app before this feature was added,
+    or if you want to enable Agent Identity detection on any custom API.
+    """
+    tid = require_tenant_id(tenant_id)
+    
+    console.print(f"\n[bold]Configuring Agent Identity Claims[/bold]")
+    console.print(f"App ID: {app_id}\n")
+    
+    # Authenticate
+    token = get_device_code_token(
+        tid,
+        scopes=["Application.ReadWrite.All"]
+    )
+    if not token:
+        raise typer.Exit(1)
+    
+    # Get the application object ID
+    from .graph_client import GraphClient
+    client = GraphClient(token.access_token)
+    
+    console.print("[bold blue]Looking up application...[/bold blue]")
+    app = client.get_application_by_app_id(app_id)
+    if not app:
+        console.print(f"[red]Application not found for App ID: {app_id}[/red]")
+        raise typer.Exit(1)
+    
+    object_id = app["id"]
+    display_name = app.get("displayName", app_id)
+    console.print(f"[green]✓ Found: {display_name}[/green]")
+    console.print(f"  Object ID: {object_id}")
+    
+    # Configure optional claims
+    console.print("\n[bold blue]Configuring optional claims...[/bold blue]")
+    if client.configure_agent_identity_optional_claims(object_id):
+        console.print("[green]✓ Agent Identity optional claims configured![/green]")
+        console.print("\n[bold]Claims added to access tokens:[/bold]")
+        console.print("  • xms_act_fct  - Actor facet (11 = AgentIdentity)")
+        console.print("  • xms_sub_fct  - Subject facet")
+        console.print("  • xms_par_app_azp - Parent application (Blueprint)")
+        console.print("  • xms_idrel    - Identity relationship")
+        console.print("  • xms_tnt_fct  - Tenant facet")
+        console.print("\n[dim]Note: Existing tokens won't have these claims until they're refreshed.[/dim]")
+    else:
+        console.print("\n[red]Failed to configure optional claims.[/red]")
         raise typer.Exit(1)
 
 

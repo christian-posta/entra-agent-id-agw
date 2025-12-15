@@ -209,6 +209,67 @@ This displays all intermediate tokens:
 - **T1 Token**: Blueprint impersonation token with `fmi_path`
 - **T2 Token**: Final OBO token (agent acting on behalf of user)
 
+#### Create MCP Server App Registration
+
+Create an app registration for an MCP Server that will:
+- Receive OBO tokens from AI Agents (via AI Gateway)
+- Perform OBO exchange to call Microsoft Graph on behalf of users
+
+```bash
+# Basic creation with User.Read permission
+python -m agent_cli.main create-mcp-server-app "MCP Tool Server"
+
+# With multiple Graph permissions
+python -m agent_cli.main create-mcp-server-app "MCP Tool Server" \
+    --graph-permissions "User.Read,Mail.Read,Calendars.Read"
+
+# Also grant an Agent Identity permission to call the MCP Server
+python -m agent_cli.main create-mcp-server-app "MCP Tool Server" \
+    --agent-name "Interactive Agent" \
+    --graph-permissions "User.Read"
+```
+
+Output:
+```
+MCP Server App 'MCP Tool Server' created successfully!
+
+Configuration for your MCP Server:
+  MCP_CLIENT_ID=abc123-...
+  MCP_CLIENT_SECRET=***
+  TENANT_ID=...
+
+API Scope (for AI Agent to request tokens):
+  api://abc123-.../access_as_user
+
+Configuration for ai-agent-cli (.env):
+  MCP_SERVER_APP_ID=abc123-...
+```
+
+#### Grant Agent Permission to MCP Server
+
+If you need to grant an Agent Identity permission to call an MCP Server after creation:
+
+```bash
+python -m agent_cli.main grant-agent-mcp-permission "Interactive Agent" "abc123-mcp-server-app-id"
+```
+
+#### Configure Agent Identity Claims on Existing App
+
+If you created an MCP Server before the optional claims feature was added, or want to add Agent Identity claims to any custom API:
+
+```bash
+python -m agent_cli.main configure-agent-claims "abc123-app-id"
+```
+
+This adds the following optional claims to access tokens:
+- `xms_act_fct` - Actor facet (value `11` = AgentIdentity)
+- `xms_sub_fct` - Subject facet
+- `xms_par_app_azp` - Parent application (Blueprint App ID)
+- `xms_idrel` - Identity relationship
+- `xms_tnt_fct` - Tenant facet
+
+These claims allow the resource API (e.g., MCP Server, Gateway) to identify that the calling application is an Agent Identity.
+
 #### Show Configuration
 
 ```bash

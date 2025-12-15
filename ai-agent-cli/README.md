@@ -31,13 +31,18 @@ An interactive CLI AI agent that uses Azure OpenAI with Microsoft Entra authenti
 1. User login → Tc (aud=Blueprint, scope=access_as_user)
 2. Get T1: Blueprint + fmi_path → T1 (impersonation token)
 3. OBO for Azure OpenAI: Tc + T1 → T2 (aud=cognitiveservices)
-4. OBO for MCP/Gateway: Tc + T1 → T2 (aud=gateway)
-5. Agent uses T2 for Azure OpenAI calls
-6. MCP client passes T2 to Gateway as Bearer token
+4. OBO for MCP Server:   Tc + T1 → T2 (aud=MCP_SERVER_APP_ID)
+5. Agent uses Azure OpenAI T2 for LLM calls
+6. MCP client passes MCP Server T2 to Gateway as Bearer token
+7. Gateway validates T2 (checks appid, user claims)
+8. MCP Server can do chained OBO to call Graph API
 
 T2 Token contains:
+  • aud   = Target resource (cognitiveservices or MCP Server)
   • appid = Agent Identity (which agent is calling)
-  • user claims = Logged in user (on whose behalf)
+  • sub   = User's ID
+  • upn   = User's email (christian.posta@solo.io)
+  • name  = User's display name
 ```
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -156,6 +161,10 @@ BLUEPRINT_CLIENT_SECRET=your-blueprint-secret
 
 # Agent Identity (the identity the agent assumes)
 AGENT_IDENTITY_APP_ID=your-agent-identity-client-id
+
+# MCP Server (for OBO tokens to AI Gateway/MCP)
+# Create with: entra-agent-cli create-mcp-server-app "MCP Tool Server"
+MCP_SERVER_APP_ID=your-mcp-server-client-id
 ```
 
 ### Prerequisites for Production Mode
@@ -164,6 +173,33 @@ AGENT_IDENTITY_APP_ID=your-agent-identity-client-id
 2. **Create an Agent Identity** from the Blueprint
 3. **Grant admin consent** for the Agent Identity to access downstream APIs
 4. User must have permission to authenticate against the Blueprint
+
+**For MCP Server OBO (optional but recommended):**
+
+5. **Create an MCP Server App Registration** using `entra-agent-cli`:
+   ```bash
+   # Option A: Create and grant agent permission in one command
+   python -m agent_cli.main create-mcp-server-app "MCP Tool Server" \
+       --agent-name "Interactive Agent" \
+       --graph-permissions "User.Read"
+   
+   # Option B: Create separately, then grant permission
+   python -m agent_cli.main create-mcp-server-app "MCP Tool Server"
+   
+   # Then grant the Agent Identity permission to call the MCP Server
+   python -m agent_cli.main grant-agent-mcp-permission "Interactive Agent" "<MCP_SERVER_APP_ID>"
+   ```
+
+6. Add the MCP Server App ID to your `.env` file:
+   ```bash
+   MCP_SERVER_APP_ID=<the-app-id-from-step-5>
+   ```
+
+7. **Verify tokens** using `show-tokens`:
+   ```bash
+   python -m agent_cli.main show-tokens
+   ```
+   All three tokens (Tc, T2 for OpenAI, T2 for MCP) should show ✓
 
 See `OBO-GUIDE.md` in the parent directory for detailed setup instructions.
 
@@ -217,6 +253,12 @@ Step 3: Getting OBO token for Azure OpenAI
 ✓ OBO token acquired for cognitiveservices
 ✓ Azure OpenAI OBO token acquired
 
+Step 4: Getting OBO token for MCP Server
+MCP Server App ID: abc123-...
+✓ MCP Server OBO token acquired
+
+Step 5: Create MCP manager with OBO token provider
+Step 6: Create agent with OBO token
 ✓ Agent initialized with OBO authentication
 
 ═══════════════════════════════════════
@@ -242,12 +284,73 @@ Step 3: Getting OBO token for Azure OpenAI
 # Show current configuration
 python -m agent_cli.main config-show
 
+# Show all OBO tokens with decoded claims
+python -m agent_cli.main show-tokens
+
+# Show tokens with raw token strings
+python -m agent_cli.main show-tokens --output-raw
+
 # Clear cached tokens (logout)
 python -m agent_cli.main logout
 
 # Force re-authentication
 python -m agent_cli.main run --force-refresh
 ```
+
+### Show Tokens Command
+
+The `show-tokens` command displays all tokens in the OBO flow with their decoded JWT claims:
+
+```bash
+python -m agent_cli.main show-tokens
+```
+
+Output:
+```
+OBO Token Flow - Token Display
+
+Step 1: Getting user token (Tc)...
+✓ Got Tc token
+
+┌─────────────────────────────────────────┐
+│ Tc Token (User token, aud=Blueprint)    │
+├─────────────────────────────────────────┤
+│ {                                       │
+│   "aud": "api://blueprint-app-id",      │
+│   "sub": "user-id...",                  │
+│   "upn": "user@example.com",            │
+│   ...                                   │
+│ }                                       │
+└─────────────────────────────────────────┘
+
+Step 3: Getting T2 for Azure OpenAI...
+✓ Got T2 for Azure OpenAI
+
+┌─────────────────────────────────────────────────────┐
+│ T2 Token (Azure OpenAI, aud=cognitiveservices)      │
+├─────────────────────────────────────────────────────┤
+│ {                                                   │
+│   "aud": "https://cognitiveservices.azure.com",     │
+│   "appid": "agent-identity-app-id",                 │
+│   "upn": "user@example.com",                        │
+│   ...                                               │
+│ }                                                   │
+└─────────────────────────────────────────────────────┘
+
+Token Summary
+┌──────────────────┬─────────────────────┬──────────────────┬─────────────┬────────┐
+│ Token            │ Audience (aud)      │ Subject (sub)    │ App ID      │ Status │
+├──────────────────┼─────────────────────┼──────────────────┼─────────────┼────────┤
+│ Tc (User)        │ api://blueprint...  │ user@example.com │ graph-cli   │ ✓      │
+│ T2 (Azure OpenAI)│ cognitiveservices   │ user@example.com │ agent-id    │ ✓      │
+│ T2 (MCP Server)  │ api://mcp-server... │ user@example.com │ agent-id    │ ✓      │
+└──────────────────┴─────────────────────┴──────────────────┴─────────────┴────────┘
+```
+
+This is useful for:
+- **Debugging**: Verify tokens have correct audiences and claims
+- **Understanding OBO**: See how user identity flows through the token chain
+- **Verifying permissions**: Check that appid matches your Agent Identity
 
 ## MCP Tool Integration
 
@@ -315,6 +418,19 @@ ai-agent-cli/
 **Cause**: Invalid Blueprint credentials or configuration.
 
 **Solution**: Verify `BLUEPRINT_APP_ID` and `BLUEPRINT_CLIENT_SECRET` are correct.
+
+### "OBO exchange failed: AADSTS65001" for MCP Server
+
+**Cause**: The Agent Identity hasn't been granted permission to request tokens for the MCP Server.
+
+**Solution**: Grant the Agent Identity permission to call the MCP Server API:
+
+```bash
+# In entra-agent-cli directory
+python -m agent_cli.main grant-agent-mcp-permission "Interactive Agent" "<MCP_SERVER_APP_ID>"
+```
+
+This creates an admin consent grant allowing the Agent Identity to request OBO tokens with the MCP Server as the audience.
 
 ### "Failed to connect to MCP server: Unauthorized"
 
