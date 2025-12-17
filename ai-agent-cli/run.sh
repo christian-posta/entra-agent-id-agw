@@ -1,0 +1,1 @@
+python -m agent_cli.main "$@"

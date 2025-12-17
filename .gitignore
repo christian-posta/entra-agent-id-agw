@@ -2,6 +2,6 @@
 _session*
 *.ps1
 .DS_Store
-.venv
+.venv*
 __pycache__
 *.key
