@@ -324,6 +324,8 @@ Now, if we want our agent to call another service using its own identity, we wil
 
 There is actually a two-step process for the blueprint to do that. The blueprint first gets a token that represents the relationship between the blueprint and an agent identity. This first token can be given to the agent to assert its identity to exchange for an actual access token for the agent itself. 
 
+![Blueprint impersonation token exchange](./images/t1-t2-exchange.png)
+
 ```powershell
 # Step 1: Get blueprint token with fmi_path pointing to agent identity
 $t1Body = @{
