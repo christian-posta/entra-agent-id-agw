@@ -322,7 +322,7 @@ Yay!! We now have a new agent identity with service principal (`f3897825-fd03-45
 
 Now, if we want our agent to call another service using its own identity, we will need to blueprint to help us out with that. The agent identity doesn't have any credentials associated with its service principal. We'll need the blueprint to get a token for the agent identity. 
 
-There is actually a two-step process for the blueprint to do that. The blueprint first gets a token that represents the relationship between the blueprint and an agent identity. This first token can be given to the agent to assert its identity to exchange for an actual access token for the agent itself. 
+There is actually a two-step process for the blueprint to do that. The blueprint first gets a token (T1) that represents the relationship between the blueprint and an agent identity. This first token can be given to the agent to assert its identity to exchange for an actual access token (T2) for the agent itself. 
 
 ![Blueprint impersonation token exchange](./images/t1-t2-exchange.png)
 
@@ -344,7 +344,7 @@ $t1Response = Invoke-RestMethod -Method POST `
 $blueprintToken = $t1Response.access_token
 Write-Host "✅ Got blueprint token (T1) - length: $($blueprintToken.Length)"
 ```
-We now have a token that can be exchanged for the agent's identity (this is referred to as `T1` in the docs):
+We now have a token  that can be exchanged for the agent's identity (this is referred to as `T1` in the docs):
 
 ```json
 {
@@ -398,7 +398,7 @@ $agentToken = $t2Response.access_token
 Write-Host "✅ Got agent identity token (T2) - length: $($agentToken.Length)"
 ```
 
-Now we have the agent identity access token! Take a look at the actual token:
+Now we have the agent identity access token (t2)! Take a look at the actual token:
 
 
 ```bash
@@ -452,7 +452,7 @@ With this Agent ID token, we can call the Graph API (or we could have scoped it 
 
 ## Wrapping up
 
-This (Part One) introduces Entra Agent ID, how it builds on existing Entra constructs and how to achieve a way to create agent-specific identities. Again, this post is meant purely for educational purposes, no comments yet how this should be used if not on Azure. Azure handles all of this behind the scenes, but if you are looking to use this outside of Azure, stay tuned to the next parts!
+This (Part One) introduces Entra Agent ID on Kubernetes (outside Azure), how it builds on existing Entra constructs and how to achieve a way to create agent-specific identities. Again, this post is meant purely for educational purposes, no comments yet how this should be used if not on Azure. Azure handles all of this behind the scenes, but if you are looking to use this outside of Azure, stay tuned to the next parts!
 
 ## Appendix A - Graph API Scope Requests for Agent Identity
 

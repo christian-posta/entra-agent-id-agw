@@ -27,17 +27,17 @@ The Blueprint must expose an API so users can request tokens for it. This is **r
 
 ```powershell
 # Your Blueprint's Client ID
-$blueprintClientId = "<your-blueprint-client-id>"
+$blueprintAppId = "<your-blueprint-client-id>"
 
 
 # Get the Blueprint application object
-$blueprintApp = Get-MgApplication -Filter "appId eq '$blueprintClientId'"
+$blueprintApp = Get-MgApplication -Filter "appId eq '$blueprintAppId'"
 $blueprintAppObjectId = $blueprintApp.Id
 
 Write-Host "Blueprint Object ID: $blueprintAppObjectId"
 
 # Step 2a: Set the Application ID URI
-$appIdUri = "api://$blueprintClientId"
+$appIdUri = "api://$blueprintAppId"
 
 
 # Use the beta cmdlet
@@ -66,7 +66,7 @@ $apiSettings = @{
 Update-MgBetaApplication -ApplicationId $blueprintAppObjectId -Api $apiSettings
 
 Write-Host "✅ Added 'access_as_user' scope"
-Write-Host "Full scope: api://$blueprintClientId/access_as_user"
+Write-Host "Full scope: api://$blueprintAppId/access_as_user"
 ```
 
 
@@ -98,9 +98,9 @@ Get a user token with the Blueprint as the audience:
 ```powershell
 # Option A: Using Azure CLI (interactive)
 az logout
-az login --tenant $tenantId --scope "api://$blueprintClientId/access_as_user"
+az login --tenant $tenantId --scope "api://$blueprintAppId/access_as_user"
 
-$userToken = az account get-access-token --resource "api://$blueprintClientId" --query accessToken -o tsv
+$userToken = az account get-access-token --resource "api://$blueprintAppId" --query accessToken -o tsv
 
 Write-Host "✅ Got user token (Tc) - length: $($userToken.Length)"
 ```
@@ -112,10 +112,10 @@ Request a token from the Blueprint with `fmi_path` pointing to the agent identit
 ```powershell
 # Step 3: Get blueprint token with fmi_path pointing to agent identity
 $t1Body = @{
-    client_id     = $blueprintClientId
+    client_id     = $blueprintAppId
     scope         = "api://AzureADTokenExchange/.default"
     grant_type    = "client_credentials"
-    client_secret = $blueprintClientSecret
+    client_secret = $clientSecret
     fmi_path      = $agentIdentityAppId
 }
 
@@ -132,7 +132,7 @@ Write-Host "✅ Got blueprint impersonation token (T1) - length: $($blueprintTok
 > ```powershell
 > # Using managed identity as FIC (recommended for production)
 > $t1Body = @{
->     client_id        = $blueprintClientId
+>     client_id        = $blueprintAppId
 >     scope            = "api://AzureADTokenExchange/.default"
 >     grant_type       = "client_credentials"
 >     client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -158,7 +158,7 @@ $agentIdentities = Invoke-MgGraphRequest -Method GET `
 $agentIdentities.value | Select-Object displayName, id | Format-Table
 
 # Set your Agent Identity's ID
-$agentIdentityId = "58326923-8cbc-4ef2-a30b-9c2a9684dbb1"
+$agentIdentityAppId = "<agent-identity-here>"
 
 # Get the Microsoft Graph service principal
 $graphSp = Invoke-MgGraphRequest -Method GET `
@@ -170,7 +170,7 @@ Write-Host "Graph Service Principal ID: $graphSpId"
 # Grant admin consent for delegated permissions
 # This creates an OAuth2PermissionGrant (admin consent for all users in tenant)
 $consentBody = @{
-    clientId    = $agentIdentityId       # The Agent Identity's ID
+    clientId    = $agentIdentityAppId       # The Agent Identity's ID
     consentType = "AllPrincipals"        # Admin consent for all users
     resourceId  = $graphSpId             # Microsoft Graph
     scope       = "User.Read openid profile offline_access"  # Scopes needed for OBO
@@ -317,7 +317,7 @@ Here's a complete script you can save and run:
 # agent-obo-flow.ps1
 param(
     [Parameter(Mandatory=$true)][string]$TenantId,
-    [Parameter(Mandatory=$true)][string]$BlueprintClientId,
+    [Parameter(Mandatory=$true)][string]$blueprintAppId,
     [Parameter(Mandatory=$true)][string]$agentIdentityAppId,
     [Parameter(Mandatory=$true)][string]$BlueprintClientSecret,
     [string]$TargetScope = "https://graph.microsoft.com/.default"
@@ -327,9 +327,9 @@ Write-Host "=== Agent Identity OBO Flow ===" -ForegroundColor Cyan
 
 # Step 1: Get user token via Azure CLI
 Write-Host "`n[1/4] Getting user token (Tc)..." -ForegroundColor Yellow
-$userToken = az account get-access-token --resource "api://$BlueprintClientId" --query accessToken -o tsv
+$userToken = az account get-access-token --resource "api://$blueprintAppId" --query accessToken -o tsv
 if (-not $userToken) {
-    Write-Host "❌ Failed to get user token. Run: az login --tenant $TenantId --scope api://$BlueprintClientId/access_as_user" -ForegroundColor Red
+    Write-Host "❌ Failed to get user token. Run: az login --tenant $TenantId --scope api://$blueprintAppId/access_as_user" -ForegroundColor Red
     exit 1
 }
 Write-Host "✅ Got user token (Tc)" -ForegroundColor Green
@@ -337,7 +337,7 @@ Write-Host "✅ Got user token (Tc)" -ForegroundColor Green
 # Step 2: Get blueprint impersonation token (T1)
 Write-Host "`n[2/4] Getting blueprint impersonation token (T1)..." -ForegroundColor Yellow
 $t1Body = @{
-    client_id     = $BlueprintClientId
+    client_id     = $blueprintAppId
     scope         = "api://AzureADTokenExchange/.default"
     grant_type    = "client_credentials"
     client_secret = $BlueprintClientSecret
@@ -402,7 +402,7 @@ Run it with:
 ```powershell
 .\agent-obo-flow.ps1 `
     -TenantId "your-tenant-id" `
-    -BlueprintClientId "your-blueprint-client-id" `
+    -blueprintAppId "your-blueprint-client-id" `
     -agentIdentityAppId "your-agent-identity-client-id" `
     -BlueprintClientSecret "your-secret"
 ```
