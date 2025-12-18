@@ -1,13 +1,14 @@
-"""MCP (Model Context Protocol) SSE client for connecting to remote tool servers."""
+"""MCP (Model Context Protocol) client using official SDK with Streamable HTTP transport."""
 
-import json
-import uuid
+import asyncio
 from typing import Optional, Any, Callable
 from dataclasses import dataclass
 
-import httpx
-from httpx_sse import connect_sse
 from rich.console import Console
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import Implementation
 
 from .models import MCPTool, MCPServer
 
@@ -25,7 +26,7 @@ class MCPResponse:
 
 
 class MCPClient:
-    """Client for connecting to MCP servers via SSE with optional Bearer auth."""
+    """Client for connecting to MCP servers via Streamable HTTP with optional Bearer auth."""
     
     def __init__(
         self,
@@ -43,9 +44,12 @@ class MCPClient:
         self.server = server
         self._access_token = access_token
         self._token_provider = token_provider
-        self._session_url: Optional[str] = None
         self._tools: list[MCPTool] = []
         self._connected = False
+        self._session: Optional[ClientSession] = None
+        self._read_stream = None
+        self._write_stream = None
+        self._context_stack = None
     
     def _get_auth_headers(self) -> dict[str, str]:
         """Get authentication headers for requests.
@@ -93,200 +97,92 @@ class MCPClient:
             True if connection successful, False otherwise
         """
         try:
-            auth_headers = self._get_auth_headers()
+            # Run the async connection in a new event loop
+            return asyncio.get_event_loop().run_until_complete(self._connect_async())
+        except RuntimeError:
+            # If there's no event loop, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._connect_async())
+            finally:
+                pass  # Don't close the loop, we'll need it for subsequent calls
+    
+    async def _connect_async(self) -> bool:
+        """Async implementation of connect."""
+        try:
+            headers = self._get_auth_headers()
             
-            # First, establish SSE connection to get the session endpoint
-            with httpx.Client(timeout=30.0) as client:
-                # Send initial connection request
-                headers = {"Accept": "text/event-stream"}
-                headers.update(auth_headers)
-                
-                response = client.get(
-                    self.server.url,
-                    headers=headers,
-                )
-                
-                if response.status_code == 401:
-                    console.print(f"[red]Authentication failed for {self.server.name}: Unauthorized[/red]")
-                    return False
-                
-                if response.status_code == 403:
-                    console.print(f"[red]Access denied to {self.server.name}: Forbidden[/red]")
-                    return False
-                
-                if response.status_code != 200:
-                    console.print(f"[red]Failed to connect to {self.server.name}: HTTP {response.status_code}[/red]")
-                    return False
-                
-                # Parse the SSE stream to get the session URL
-                # The server should send an 'endpoint' event with the session URL
-                for line in response.iter_lines():
-                    if line.startswith("data:"):
-                        data = json.loads(line[5:].strip())
-                        if "endpoint" in data:
-                            self._session_url = data["endpoint"]
-                            break
-                
-                if not self._session_url:
-                    # If no separate endpoint, use the base URL for requests
-                    self._session_url = self.server.url.replace("/sse", "")
+            # Use the official MCP SDK's streamablehttp_client
+            # We need to keep the context manager open, so we manually enter it
+            self._context_stack = streamablehttp_client(
+                url=self.server.url,
+                headers=headers if headers else None,
+                timeout=30,
+                sse_read_timeout=300,
+            )
+            
+            # Enter the async context manager
+            self._read_stream, self._write_stream, self._get_session_id = await self._context_stack.__aenter__()
+            
+            # Create the session
+            self._session = ClientSession(
+                self._read_stream, 
+                self._write_stream,
+                client_info=Implementation(name="ai-agent-cli", version="0.1.0"),
+            )
+            
+            # Enter the session context
+            await self._session.__aenter__()
             
             # Initialize the MCP session
-            init_result = self._send_request("initialize", {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
-                },
-                "clientInfo": {
-                    "name": "ai-agent-cli",
-                    "version": "0.1.0"
-                }
-            })
+            init_result = await self._session.initialize()
             
-            if init_result and init_result.result:
-                # Send initialized notification
-                self._send_notification("notifications/initialized", {})
+            if init_result:
                 self._connected = True
                 
                 # Fetch available tools
-                self._fetch_tools()
+                await self._fetch_tools_async()
                 
                 console.print(f"[green]✓ Connected to MCP server: {self.server.name}[/green]")
+                console.print(f"[dim]  Server: {init_result.serverInfo.name} v{init_result.serverInfo.version}[/dim]")
+                console.print(f"[dim]  Protocol: {init_result.protocolVersion}[/dim]")
                 return True
             
             return False
             
         except Exception as e:
-            console.print(f"[red]Failed to connect to {self.server.name}: {e}[/red]")
+            error_msg = str(e)
+            if "401" in error_msg:
+                console.print(f"[red]Authentication failed for {self.server.name}: Unauthorized[/red]")
+            elif "403" in error_msg:
+                console.print(f"[red]Access denied to {self.server.name}: Forbidden[/red]")
+            elif "422" in error_msg:
+                console.print(f"[red]Failed to connect to {self.server.name}: HTTP 422 - Server rejected request[/red]")
+                console.print(f"[yellow]This may indicate a protocol version mismatch.[/yellow]")
+            else:
+                console.print(f"[red]Failed to connect to {self.server.name}: {e}[/red]")
             return False
     
-    def _send_request(self, method: str, params: dict) -> Optional[MCPResponse]:
-        """Send a JSON-RPC request to the MCP server.
-        
-        Args:
-            method: JSON-RPC method name
-            params: Method parameters
-            
-        Returns:
-            MCPResponse if successful, None otherwise
-        """
-        if not self._session_url:
-            return None
-        
-        request_id = str(uuid.uuid4())
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params
-        }
-        
-        try:
-            auth_headers = self._get_auth_headers()
-            headers = {"Content-Type": "application/json"}
-            headers.update(auth_headers)
-            
-            with httpx.Client(timeout=60.0) as client:
-                response = client.post(
-                    self._session_url,
-                    json=payload,
-                    headers=headers,
-                )
-                
-                if response.status_code == 401:
-                    console.print(f"[red]MCP request unauthorized - token may be expired[/red]")
-                    return None
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    return MCPResponse(
-                        id=data.get("id", request_id),
-                        result=data.get("result"),
-                        error=data.get("error")
-                    )
-                elif response.status_code == 202:
-                    # Accepted - need to poll for result via SSE
-                    return self._poll_for_response(request_id)
-                    
-        except Exception as e:
-            console.print(f"[red]MCP request error: {e}[/red]")
-        
-        return None
-    
-    def _poll_for_response(self, request_id: str) -> Optional[MCPResponse]:
-        """Poll SSE endpoint for a response to a pending request.
-        
-        Args:
-            request_id: The request ID to wait for
-            
-        Returns:
-            MCPResponse when received, None on timeout
-        """
-        try:
-            auth_headers = self._get_auth_headers()
-            
-            with httpx.Client(timeout=60.0) as client:
-                with connect_sse(client, "GET", self.server.url, headers=auth_headers) as event_source:
-                    for sse in event_source.iter_sse():
-                        if sse.event == "message":
-                            data = json.loads(sse.data)
-                            if data.get("id") == request_id:
-                                return MCPResponse(
-                                    id=request_id,
-                                    result=data.get("result"),
-                                    error=data.get("error")
-                                )
-        except Exception as e:
-            console.print(f"[red]SSE polling error: {e}[/red]")
-        
-        return None
-    
-    def _send_notification(self, method: str, params: dict) -> None:
-        """Send a JSON-RPC notification (no response expected).
-        
-        Args:
-            method: Notification method name
-            params: Notification parameters
-        """
-        if not self._session_url:
-            return
-        
-        payload = {
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        }
-        
-        try:
-            auth_headers = self._get_auth_headers()
-            headers = {"Content-Type": "application/json"}
-            headers.update(auth_headers)
-            
-            with httpx.Client(timeout=30.0) as client:
-                client.post(
-                    self._session_url,
-                    json=payload,
-                    headers=headers,
-                )
-        except Exception:
-            pass  # Notifications don't require acknowledgment
-    
-    def _fetch_tools(self) -> None:
+    async def _fetch_tools_async(self) -> None:
         """Fetch available tools from the server."""
-        result = self._send_request("tools/list", {})
-        
-        if result and result.result:
-            tools_data = result.result.get("tools", [])
+        if not self._session:
+            return
+            
+        try:
+            result = await self._session.list_tools()
             self._tools = []
             
-            for tool_data in tools_data:
-                tool = MCPTool(
-                    name=tool_data.get("name", ""),
-                    description=tool_data.get("description", ""),
-                    input_schema=tool_data.get("inputSchema", {}),
+            for tool in result.tools:
+                mcp_tool = MCPTool(
+                    name=tool.name,
+                    description=tool.description or "",
+                    input_schema=tool.inputSchema if hasattr(tool, 'inputSchema') else {},
                     server_name=self.server.name
                 )
-                self._tools.append(tool)
+                self._tools.append(mcp_tool)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not fetch tools: {e}[/yellow]")
     
     def call_tool(self, name: str, arguments: dict) -> Optional[Any]:
         """Call a tool on the MCP server.
@@ -298,35 +194,64 @@ class MCPClient:
         Returns:
             Tool result if successful, None otherwise
         """
-        result = self._send_request("tools/call", {
-            "name": name,
-            "arguments": arguments
-        })
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(self._call_tool_async(name, arguments))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(self._call_tool_async(name, arguments))
+    
+    async def _call_tool_async(self, name: str, arguments: dict) -> Optional[Any]:
+        """Async implementation of call_tool."""
+        if not self._session:
+            console.print(f"[red]Not connected to MCP server[/red]")
+            return None
         
-        if result:
-            if result.error:
-                console.print(f"[red]Tool error: {result.error.get('message', 'Unknown error')}[/red]")
+        try:
+            result = await self._session.call_tool(name, arguments)
+            
+            if result.isError:
+                error_content = result.content[0] if result.content else None
+                error_msg = error_content.text if error_content and hasattr(error_content, 'text') else 'Unknown error'
+                console.print(f"[red]Tool error: {error_msg}[/red]")
                 return None
             
-            if result.result:
-                # MCP tools return content array
-                content = result.result.get("content", [])
-                if content:
-                    # Combine text content
-                    text_parts = []
-                    for item in content:
-                        if item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
-                    return "\n".join(text_parts) if text_parts else content
-                return result.result
-        
-        return None
+            # Extract text content from result
+            if result.content:
+                text_parts = []
+                for item in result.content:
+                    if hasattr(item, 'text'):
+                        text_parts.append(item.text)
+                return "\n".join(text_parts) if text_parts else result.content
+            
+            return None
+            
+        except Exception as e:
+            console.print(f"[red]Tool call error: {e}[/red]")
+            return None
     
     def disconnect(self) -> None:
         """Disconnect from the MCP server."""
-        self._connected = False
-        self._session_url = None
-        self._tools = []
+        try:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(self._disconnect_async())
+        except RuntimeError:
+            pass
+        finally:
+            self._connected = False
+            self._session = None
+            self._tools = []
+    
+    async def _disconnect_async(self) -> None:
+        """Async implementation of disconnect."""
+        try:
+            if self._session:
+                await self._session.__aexit__(None, None, None)
+            if self._context_stack:
+                await self._context_stack.__aexit__(None, None, None)
+        except Exception:
+            pass  # Ignore errors during cleanup
 
 
 class MCPManager:
