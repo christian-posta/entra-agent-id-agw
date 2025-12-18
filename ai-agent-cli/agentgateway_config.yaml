@@ -18,6 +18,52 @@ binds:
 - port: 3000
   listeners:
   - routes:
+
+  # ------------------------------------------------------------
+  # OpenAI route
+  # ------------------------------------------------------------
+    - name: openai
+      matches:
+      - path:
+          pathPrefix: /llm
+      backends:
+      - ai:
+          name: openai
+          hostOverride: "ceposta-azure-openai.openai.azure.com:443"
+          provider:
+            openAI:
+              model: gpt-4.1-mini
+
+      policies:
+        urlRewrite:
+          authority:
+            full: "ceposta-azure-openai.openai.azure.com"
+          path:
+            prefix: ""
+
+        backendTLS: {}                 
+        backendAuth:  
+          passthrough: {}
+        cors:
+          allowOrigins: ["*"]
+          allowHeaders: ["*"]
+          allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+
+        ## We require JWT auth for calling this route
+        ## it is expected to be coming from an SSO IdP  
+        jwtAuth:
+          mode: strict
+          issuer: https://sts.windows.net/5e7d8166-7876-4755-a1a4-b476d4a344f6/
+          audiences: [https://cognitiveservices.azure.com]
+          jwks:
+            url: https://login.microsoftonline.com/5e7d8166-7876-4755-a1a4-b476d4a344f6/discovery/v2.0/keys       
+        
+        ## We will require JWT for all calls except OPTIONS
+        ## If this is not an OPTIONS request, the jwt.sub must be present
+        authorization:
+          rules:
+
+            - "jwt.sub != null"     
 # ------------------------------------------------------------
 # Microsoft Entra route
 # ------------------------------------------------------------
