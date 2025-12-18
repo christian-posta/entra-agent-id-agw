@@ -544,7 +544,8 @@ def show_tokens(
     
     if output_raw:
         console.print(f"\n[dim]Raw Tc token:[/dim]")
-        console.print(f"[dim]{tc_token.access_token[:50]}...{tc_token.access_token[-20:]}[/dim]\n")
+        console.print(tc_token.access_token)
+        console.print()
     
     # Step 2: Create OBO manager and get tokens
     console.print("[bold blue]Step 2: Creating OBO Token Manager...[/bold blue]")
@@ -569,7 +570,8 @@ def show_tokens(
         
         if output_raw:
             console.print(f"\n[dim]Raw Azure OpenAI T2 token:[/dim]")
-            console.print(f"[dim]{aoai_token.access_token[:50]}...{aoai_token.access_token[-20:]}[/dim]\n")
+            console.print(aoai_token.access_token)
+            console.print()
     else:
         console.print("[red]✗ Failed to get T2 for Azure OpenAI[/red]")
         console.print("[yellow]Hint: Ensure admin consent is granted for the Agent Identity.[/yellow]\n")
@@ -588,7 +590,8 @@ def show_tokens(
             
             if output_raw:
                 console.print(f"\n[dim]Raw MCP Server T2 token:[/dim]")
-                console.print(f"[dim]{mcp_token.access_token[:50]}...{mcp_token.access_token[-20:]}[/dim]\n")
+                console.print(mcp_token.access_token)
+                console.print()
         else:
             console.print("[red]✗ Failed to get T2 for MCP Server[/red]")
             console.print("[yellow]Hint: Ensure the Agent Identity has permission to call the MCP Server.[/yellow]\n")
