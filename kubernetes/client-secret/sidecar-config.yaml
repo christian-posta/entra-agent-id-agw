@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-config
+  namespace: entra-demo
+data:
+  
+  # Azure AD / Entra configuration
+  AzureAd__Instance: "https://login.microsoftonline.com/"
+  AzureAd__TenantId: "${TENANT_ID}"
+  AzureAd__ClientId: "${CLIENT_ID}"
+  
+  # Credential source type
+  AzureAd__ClientCredentials__0__SourceType: "ClientSecret"
+  
+  # Downstream API configuration (example: Microsoft Graph)
+  DownstreamApis__graph__BaseUrl: "https://graph.microsoft.com/v1.0/"
+  DownstreamApis__graph__Scopes__0: "https://graph.microsoft.com/.default"
+  # Default to App Tokens at the moment
+  DownstreamApis__graph__RequestAppToken: "true"
+  
+  # ASP.NET Core settings
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:5000"

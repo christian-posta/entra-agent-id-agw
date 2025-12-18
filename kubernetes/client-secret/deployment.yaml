@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: entra-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      containers:
+      # Your application container
+      - name: app
+        image: curlimages/curl:latest
+        command: ["sleep", "infinity"]  # Keep container running for testing
+        env:
+        - name: SIDECAR_URL
+          value: "http://localhost:5000"
+      
+      # Entra SDK Sidecar
+      - name: sidecar
+        image: mcr.microsoft.com/entra-sdk/auth-sidecar:1.0.0-azurelinux3.0-distroless
+        ports:
+        - containerPort: 5000
+        envFrom:
+        - configMapRef:
+            name: sidecar-config
+        - secretRef:
+            name: sidecar-secret
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 5000
+            httpHeaders:
+            - name: Host
+              value: localhost            
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 5000
+            httpHeaders:
+            - name: Host
+              value: localhost            
+          initialDelaySeconds: 5
+          periodSeconds: 5
