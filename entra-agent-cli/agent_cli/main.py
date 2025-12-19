@@ -1076,6 +1076,121 @@ def list_federated_credentials(
             console.print(f"  Description: {fic.get('description')}")
 
 
+@app.command("delete-federated-credential")
+def delete_federated_credential(
+    blueprint_name: Optional[str] = typer.Argument(None, help="Name of the locally stored blueprint"),
+    credential_name: str = typer.Option(..., "--name", "-n", help="Name of the federated credential to delete"),
+    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Blueprint client ID (instead of stored name)"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
+    """Delete a Federated Identity Credential from a Blueprint.
+    
+    Examples:
+    
+        # Using stored blueprint name
+        python -m agent_cli.main delete-federated-credential "My Blueprint" \\
+            --name "namespace-sa-name-workload-id"
+        
+        # Using blueprint client ID directly
+        python -m agent_cli.main delete-federated-credential \\
+            --blueprint-id "abc123-client-id" \\
+            --name "old-credential"
+        
+        # Skip confirmation
+        python -m agent_cli.main delete-federated-credential "My Blueprint" \\
+            --name "old-credential" --force
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Determine blueprint client ID
+    bp_client_id: Optional[str] = None
+    bp_display_name: Optional[str] = None
+    
+    if blueprint_id:
+        bp_client_id = blueprint_id
+    elif blueprint_name:
+        blueprint = config.get_blueprint(blueprint_name)
+        if not blueprint:
+            console.print(f"[red]Blueprint '{blueprint_name}' not found in local config.[/red]")
+            console.print("Use 'list-blueprints' to see available blueprints, or use --blueprint-id.")
+            raise typer.Exit(1)
+        bp_client_id = blueprint.app_id
+        bp_display_name = blueprint_name
+    else:
+        console.print("[red]Error: Either blueprint name or --blueprint-id is required.[/red]")
+        raise typer.Exit(1)
+    
+    console.print(f"\n[bold]Deleting Federated Identity Credential[/bold]")
+    if bp_display_name:
+        console.print(f"Blueprint: {bp_display_name} ({bp_client_id})")
+    else:
+        console.print(f"Blueprint ID: {bp_client_id}")
+    console.print(f"Credential Name: {credential_name}")
+    console.print()
+    
+    # Authenticate
+    console.print("[bold blue]Authenticating...[/bold blue]")
+    token = get_device_code_token(
+        tid, 
+        scopes=["Application.ReadWrite.All"],
+    )
+    if not token:
+        raise typer.Exit(1)
+    
+    # Get the Blueprint application object ID
+    console.print("[bold blue]Looking up Blueprint application...[/bold blue]")
+    client = GraphClient(token.access_token)
+    blueprint_app = client.get_blueprint_by_app_id(bp_client_id)
+    
+    if not blueprint_app:
+        console.print(f"[red]Blueprint application not found with Client ID: {bp_client_id}[/red]")
+        raise typer.Exit(1)
+    
+    object_id = blueprint_app["id"]
+    display_name = blueprint_app.get("displayName", bp_client_id)
+    console.print(f"[green]✓ Found Blueprint: {display_name}[/green]")
+    
+    # Find the credential by name
+    console.print("[bold blue]Looking up federated credential...[/bold blue]")
+    fics = client.list_federated_identity_credentials(object_id)
+    
+    target_fic = None
+    for fic in fics:
+        if fic.get("name") == credential_name:
+            target_fic = fic
+            break
+    
+    if not target_fic:
+        console.print(f"[red]Federated credential '{credential_name}' not found on this Blueprint.[/red]")
+        console.print("[dim]Use 'list-federated-credentials' to see available credentials.[/dim]")
+        raise typer.Exit(1)
+    
+    # Show what we're about to delete
+    console.print(f"\n[yellow]About to delete:[/yellow]")
+    console.print(f"  Name: {target_fic.get('name')}")
+    console.print(f"  Subject: {target_fic.get('subject')}")
+    console.print(f"  Issuer: {target_fic.get('issuer')}")
+    console.print()
+    
+    # Confirm deletion
+    if not force:
+        if not typer.confirm("Are you sure you want to delete this credential?"):
+            console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(0)
+    
+    # Delete the credential
+    console.print("[bold blue]Deleting federated credential...[/bold blue]")
+    credential_id = target_fic.get("id")
+    
+    if client.delete_federated_identity_credential(object_id, credential_id):
+        console.print(f"\n[bold green]✓ Federated credential '{credential_name}' deleted successfully![/bold green]")
+    else:
+        console.print("\n[red]Failed to delete federated credential.[/red]")
+        raise typer.Exit(1)
+
+
 @app.command("list-applications")
 def list_applications_cmd(
     name_filter: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter by display name (substring match)"),

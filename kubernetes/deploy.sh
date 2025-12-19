@@ -16,7 +16,7 @@ fi
 
 # Verify required variables are set
 # Note: CLIENT_SECRET is no longer required - using workload identity federation
-required_vars=("TENANT_ID" "CLIENT_ID")
+required_vars=("TENANT_ID" "CLIENT_ID" "MCP_SERVER_APP_ID")
 for var in "${required_vars[@]}"; do
     if [[ -z "${!var:-}" ]]; then
         echo "Error: Required variable $var is not set in .env"

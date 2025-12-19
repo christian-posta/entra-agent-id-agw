@@ -19,6 +19,16 @@ data:
   DownstreamApis__graph__BaseUrl: "https://graph.microsoft.com/v1.0/"
   DownstreamApis__graph__Scopes__0: "https://graph.microsoft.com/.default"
   DownstreamApis__graph__RequestAppToken: "true"
+
+  # Azure OpenAI downstream API
+  DownstreamApis__openai__BaseUrl: "https://your-resource.openai.azure.com/"
+  DownstreamApis__openai__Scopes__0: "https://cognitiveservices.azure.com/.default"
+  DownstreamApis__openai__RequestAppToken: "false"
+  
+  # MCP Server downstream API
+  DownstreamApis__mcp__BaseUrl: "https://your-mcp-gateway/"
+  DownstreamApis__mcp__Scopes__0: "api://${MCP_SERVER_APP_ID}/.default"
+  DownstreamApis__mcp__RequestAppToken: "false"  
   
   # ASP.NET Core settings
   ASPNETCORE_ENVIRONMENT: "Production"

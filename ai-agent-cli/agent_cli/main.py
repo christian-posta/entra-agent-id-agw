@@ -548,10 +548,11 @@ def show_tokens(
     # Check configuration
     if not config.tenant_id or not config.blueprint_app_id:
         console.print("[red]Error: Entra configuration incomplete.[/red]")
-        console.print("Required: TENANT_ID, BLUEPRINT_APP_ID, BLUEPRINT_CLIENT_SECRET, AGENT_IDENTITY_APP_ID")
+        console.print("Required: TENANT_ID, BLUEPRINT_APP_ID")
         raise typer.Exit(1)
     
-    console.print("\n[bold]OBO Token Flow - Token Display[/bold]\n")
+    provider_mode = config.token_provider_mode
+    console.print(f"\n[bold]OBO Token Flow - Token Display (provider={provider_mode})[/bold]\n")
     
     # Step 1: Get user token (Tc)
     console.print("[bold blue]Step 1: Getting user token (Tc)...[/bold blue]")
@@ -577,56 +578,86 @@ def show_tokens(
         console.print(tc_token.access_token)
         console.print()
     
-    # Step 2: Create OBO manager and get tokens
-    console.print("[bold blue]Step 2: Creating OBO Token Manager...[/bold blue]")
+    # Step 2: Create Token Provider based on mode
+    console.print(f"[bold blue]Step 2: Creating Token Provider ({provider_mode} mode)...[/bold blue]")
     
-    obo_manager = OBOTokenManager(
-        tenant_id=config.tenant_id,
-        blueprint_app_id=config.blueprint_app_id,
-        blueprint_client_secret=config.blueprint_client_secret,
-        agent_identity_app_id=config.agent_identity_app_id,
-        user_token=tc_token.access_token,
-    )
+    try:
+        if provider_mode == "sidecar":
+            token_provider = create_token_provider(
+                mode="sidecar",
+                sidecar_url=config.sidecar_url,
+                sidecar_openai_api_name=config.sidecar_openai_api_name,
+                sidecar_mcp_api_name=config.sidecar_mcp_api_name,
+                agent_identity_app_id=config.agent_identity_app_id,
+            )
+        else:
+            token_provider = create_token_provider(
+                mode="direct",
+                tenant_id=config.tenant_id,
+                blueprint_app_id=config.blueprint_app_id,
+                blueprint_client_secret=config.blueprint_client_secret,
+                agent_identity_app_id=config.agent_identity_app_id,
+                mcp_server_app_id=config.mcp_server_app_id,
+            )
+        
+        if not token_provider.initialize(tc_token.access_token):
+            console.print("[red]Failed to initialize token provider.[/red]")
+            raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    
+    console.print()
     
     # Step 3: Get T2 for Azure OpenAI
-    console.print("\n[bold blue]Step 3: Getting T2 for Azure OpenAI...[/bold blue]")
-    console.print(f"[dim]Scope: {AZURE_COGNITIVE_SERVICES_SCOPE}[/dim]")
+    console.print("[bold blue]Step 3: Getting T2 for Azure OpenAI...[/bold blue]")
+    if provider_mode == "direct":
+        console.print(f"[dim]Scope: {AZURE_COGNITIVE_SERVICES_SCOPE}[/dim]")
+    else:
+        console.print(f"[dim]Sidecar API: {config.sidecar_openai_api_name}[/dim]")
     
-    aoai_token = obo_manager.get_azure_openai_token()
+    aoai_token_str = token_provider.get_openai_token()
     
-    if aoai_token:
+    if aoai_token_str:
+        aoai_token = TokenResult(access_token=aoai_token_str)
         console.print("[green]✓ Got T2 for Azure OpenAI[/green]\n")
         display_token("T2 Token (Azure OpenAI, aud=cognitiveservices)", aoai_token, "green")
         
         if output_raw:
             console.print(f"\n[dim]Raw Azure OpenAI T2 token:[/dim]")
-            console.print(aoai_token.access_token)
+            console.print(aoai_token_str)
             console.print()
     else:
         console.print("[red]✗ Failed to get T2 for Azure OpenAI[/red]")
         console.print("[yellow]Hint: Ensure admin consent is granted for the Agent Identity.[/yellow]\n")
+        aoai_token = None
     
-    # Step 4: Get T2 for MCP Server (if configured)
-    if config.mcp_server_app_id:
-        console.print("[bold blue]Step 4: Getting T2 for MCP Server...[/bold blue]")
-        mcp_scope = f"api://{config.mcp_server_app_id}/.default"
-        console.print(f"[dim]Scope: {mcp_scope}[/dim]")
+    # Step 4: Get T2 for MCP Server
+    console.print("[bold blue]Step 4: Getting T2 for MCP Server...[/bold blue]")
+    if provider_mode == "direct" and not config.mcp_server_app_id:
+        console.print("[dim]Skipped - MCP_SERVER_APP_ID not configured[/dim]\n")
+        mcp_token = None
+    else:
+        if provider_mode == "direct":
+            console.print(f"[dim]Scope: api://{config.mcp_server_app_id}/.default[/dim]")
+        else:
+            console.print(f"[dim]Sidecar API: {config.sidecar_mcp_api_name}[/dim]")
         
-        mcp_token = obo_manager.get_token_for_scope(mcp_scope)
+        mcp_token_str = token_provider.get_mcp_token()
         
-        if mcp_token:
+        if mcp_token_str:
+            mcp_token = TokenResult(access_token=mcp_token_str)
             console.print("[green]✓ Got T2 for MCP Server[/green]\n")
             display_token("T2 Token (MCP Server, aud=MCP_SERVER_APP_ID)", mcp_token, "magenta")
             
             if output_raw:
                 console.print(f"\n[dim]Raw MCP Server T2 token:[/dim]")
-                console.print(mcp_token.access_token)
+                console.print(mcp_token_str)
                 console.print()
         else:
             console.print("[red]✗ Failed to get T2 for MCP Server[/red]")
             console.print("[yellow]Hint: Ensure the Agent Identity has permission to call the MCP Server.[/yellow]\n")
-    else:
-        console.print("[dim]Step 4: Skipped - MCP_SERVER_APP_ID not configured[/dim]\n")
+            mcp_token = None
     
     # Summary
     console.print("[bold]Token Summary[/bold]")
@@ -661,20 +692,19 @@ def show_tokens(
         table.add_row("T2 (Azure OpenAI)", "-", "-", "-", "[red]✗[/red]")
     
     # T2 MCP
-    if config.mcp_server_app_id:
-        if mcp_token:
-            mcp_claims = mcp_token.decoded_claims()
-            table.add_row(
-                "T2 (MCP Server)",
-                mcp_claims.get("aud", "N/A")[:40] + "..." if len(str(mcp_claims.get("aud", ""))) > 40 else mcp_claims.get("aud", "N/A"),
-                mcp_claims.get("upn", mcp_claims.get("sub", "N/A")),
-                mcp_claims.get("appid", "N/A"),
-                "[green]✓[/green]",
-            )
-        else:
-            table.add_row("T2 (MCP Server)", "-", "-", "-", "[red]✗[/red]")
-    else:
+    if mcp_token:
+        mcp_claims = mcp_token.decoded_claims()
+        table.add_row(
+            "T2 (MCP Server)",
+            mcp_claims.get("aud", "N/A")[:40] + "..." if len(str(mcp_claims.get("aud", ""))) > 40 else mcp_claims.get("aud", "N/A"),
+            mcp_claims.get("upn", mcp_claims.get("sub", "N/A")),
+            mcp_claims.get("appid", "N/A"),
+            "[green]✓[/green]",
+        )
+    elif provider_mode == "direct" and not config.mcp_server_app_id:
         table.add_row("T2 (MCP Server)", "[dim]Not configured[/dim]", "-", "-", "[dim]-[/dim]")
+    else:
+        table.add_row("T2 (MCP Server)", "-", "-", "-", "[red]✗[/red]")
     
     console.print(table)
     console.print()

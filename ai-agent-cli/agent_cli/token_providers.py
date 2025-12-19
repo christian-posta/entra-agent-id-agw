@@ -248,8 +248,13 @@ class SidecarTokenProvider:
                 response = client.get(url, params=params, headers=headers)
                 
                 if response.status_code == 200:
-                    # Response is the authorization header value: "Bearer <token>"
-                    auth_header = response.text.strip()
+                    # Response is JSON: {"authorizationHeader": "Bearer <token>"}
+                    try:
+                        data = response.json()
+                        auth_header = data.get("authorizationHeader", "")
+                    except Exception:
+                        # Fallback: treat as plain text if not JSON
+                        auth_header = response.text.strip()
                     
                     # Strip "Bearer " prefix if present
                     if auth_header.lower().startswith("bearer "):
