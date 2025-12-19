@@ -317,6 +317,29 @@ python -m agent_cli.main list-federated-credentials "My Blueprint"
 python -m agent_cli.main list-federated-credentials --blueprint-id "abc123-client-id"
 ```
 
+#### List Application Registrations
+
+List all application registrations in your tenant, with optional filtering by display name:
+
+```bash
+# List all applications (up to 100)
+python -m agent_cli.main list-applications
+
+# Filter by name containing "mcp" (case-insensitive substring search)
+python -m agent_cli.main list-applications --filter mcp
+
+# Filter by name starting with "MCP" (prefix match)
+python -m agent_cli.main list-applications --filter MCP --starts-with
+```
+
+This is useful for finding MCP Server apps or any other application registrations by name.
+
+Output includes:
+- **Display Name** - The app's name
+- **App ID (Client ID)** - The application/client ID  
+- **Object ID** - The Azure AD object ID
+- **Created** - When the app was created
+
 #### Show Configuration
 
 ```bash

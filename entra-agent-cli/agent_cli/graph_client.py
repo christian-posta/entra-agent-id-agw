@@ -669,6 +669,42 @@ class GraphClient:
         
         return success, data
 
+    def list_applications(
+        self,
+        name_filter: Optional[str] = None,
+        use_search: bool = True,
+    ) -> list[dict]:
+        """List applications, optionally filtering by display name.
+        
+        Args:
+            name_filter: Filter string to match in display name
+            use_search: If True, use $search (substring match). If False, use startswith filter.
+            
+        Returns:
+            List of application dicts
+        """
+        if name_filter:
+            if use_search:
+                # Use $search for substring matching (requires ConsistencyLevel header)
+                url = f'{GRAPH_V1_URL}/applications?$search="displayName:{name_filter}"&$orderby=displayName&$select=id,appId,displayName,createdDateTime'
+                extra_headers = {"ConsistencyLevel": "eventual"}
+            else:
+                # Use $filter with startswith (more limited but doesn't require special header)
+                url = f"{GRAPH_V1_URL}/applications?$filter=startswith(displayName, '{name_filter}')&$orderby=displayName&$select=id,appId,displayName,createdDateTime"
+                extra_headers = None
+        else:
+            # List all applications (limited to top 100)
+            url = f"{GRAPH_V1_URL}/applications?$top=100&$orderby=displayName&$select=id,appId,displayName,createdDateTime"
+            extra_headers = None
+        
+        success, data = self._request("GET", url, extra_headers=extra_headers)
+        
+        if success:
+            return data.get("value", [])
+        
+        console.print(f"[red]Failed to list applications: {data}[/red]")
+        return []
+
     def list_federated_identity_credentials(self, app_object_id: str) -> list[dict]:
         """List all Federated Identity Credentials on an application.
         

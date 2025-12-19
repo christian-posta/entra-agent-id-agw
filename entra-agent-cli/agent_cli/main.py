@@ -1076,6 +1076,73 @@ def list_federated_credentials(
             console.print(f"  Description: {fic.get('description')}")
 
 
+@app.command("list-applications")
+def list_applications_cmd(
+    name_filter: Optional[str] = typer.Option(None, "--filter", "-f", help="Filter by display name (substring match)"),
+    starts_with: bool = typer.Option(False, "--starts-with", "-s", help="Use startsWith filter instead of search"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", help="Force re-authentication"),
+) -> None:
+    """List application registrations, optionally filtering by name.
+    
+    Examples:
+    
+        # List all applications (up to 100)
+        python -m agent_cli.main list-applications
+        
+        # Filter by name containing "mcp"
+        python -m agent_cli.main list-applications --filter mcp
+        
+        # Filter by name starting with "MCP"
+        python -m agent_cli.main list-applications --filter MCP --starts-with
+    """
+    tid = require_tenant_id(tenant_id)
+    
+    console.print("[bold blue]Authenticating...[/bold blue]")
+    token = get_device_code_token(tid, scopes=READ_ONLY_SCOPES, force_refresh=force_refresh)
+    if not token:
+        raise typer.Exit(1)
+    
+    client = GraphClient(token.access_token)
+    
+    if name_filter:
+        console.print(f"[bold blue]Searching applications with name containing '{name_filter}'...[/bold blue]")
+    else:
+        console.print("[bold blue]Listing applications...[/bold blue]")
+    
+    apps = client.list_applications(name_filter=name_filter, use_search=not starts_with)
+    
+    if not apps:
+        if name_filter:
+            console.print(f"[yellow]No applications found matching '{name_filter}'.[/yellow]")
+        else:
+            console.print("[yellow]No applications found.[/yellow]")
+        return
+    
+    table = Table(title=f"Applications{f' (filter: {name_filter})' if name_filter else ''}", show_lines=False)
+    table.add_column("Display Name", style="cyan", no_wrap=True)
+    table.add_column("App ID (Client ID)", style="green", no_wrap=True)
+    table.add_column("Object ID", style="dim", no_wrap=True)
+    table.add_column("Created", style="yellow", no_wrap=True)
+    
+    for app in apps:
+        # Format created date
+        created = app.get("createdDateTime", "N/A")
+        if created != "N/A":
+            # Truncate to just the date part
+            created = created[:10] if len(created) >= 10 else created
+        
+        table.add_row(
+            app.get("displayName", "N/A"),
+            app.get("appId", "N/A"),
+            app.get("id", "N/A"),
+            created,
+        )
+    
+    console.print(table)
+    console.print(f"\n[dim]Found {len(apps)} application(s)[/dim]")
+
+
 @app.command("config")
 def show_config(
     path: bool = typer.Option(False, "--path", "-p", help="Show config file path only"),
