@@ -270,6 +270,53 @@ This adds the following optional claims to access tokens:
 
 These claims allow the resource API (e.g., MCP Server, Gateway) to identify that the calling application is an Agent Identity.
 
+#### Add Federated Identity Credential (Workload Identity)
+
+Add a Federated Identity Credential to a Blueprint for Kubernetes workload identity authentication. This allows pods with a specific service account to authenticate as the Blueprint without needing a client secret.
+
+```bash
+# Using stored blueprint name
+python -m agent_cli.main add-federated-credential "My Blueprint" \
+    --issuer "https://oidc.blob.core.windows.net/oidc" \
+    --subject "system:serviceaccount:entra-demo:sidecar-sa"
+
+# With custom credential name and description
+python -m agent_cli.main add-federated-credential "My Blueprint" \
+    --issuer "https://oidc.blob.core.windows.net/oidc" \
+    --subject "system:serviceaccount:entra-demo:sidecar-sa" \
+    --name "kind-workload-identity" \
+    --description "Workload identity for Kind cluster sidecar"
+
+# Using blueprint client ID directly (if not stored locally)
+python -m agent_cli.main add-federated-credential \
+    --blueprint-id "abc123-client-id" \
+    --issuer "https://oidc.blob.core.windows.net/oidc" \
+    --subject "system:serviceaccount:entra-demo:sidecar-sa"
+```
+
+Parameters:
+- `blueprint-name` (positional): Name of locally stored blueprint
+- `--issuer` / `-i`: OIDC Issuer URL (required)
+- `--subject` / `-s`: Subject claim in format `system:serviceaccount:<namespace>:<sa-name>` (required)
+- `--name` / `-n`: Credential name (auto-generated from subject if not provided)
+- `--audience` / `-a`: Token audience (default: `api://AzureADTokenExchange`)
+- `--description`: Optional description
+- `--blueprint-id`: Use client ID instead of stored blueprint name
+
+See `WORKLOAD-IDENTITY-GUIDE.md` for detailed setup instructions.
+
+#### List Federated Identity Credentials
+
+List all Federated Identity Credentials configured on a Blueprint:
+
+```bash
+# Using stored blueprint name
+python -m agent_cli.main list-federated-credentials "My Blueprint"
+
+# Using blueprint client ID directly
+python -m agent_cli.main list-federated-credentials --blueprint-id "abc123-client-id"
+```
+
 #### Show Configuration
 
 ```bash
@@ -331,6 +378,8 @@ For read-only operations (listing), only `Application.Read.All` and `User.Read` 
 
 - Client secrets are stored in the local config file (`~/.agent-identity-cli.json`)
 - Authentication tokens are cached in `~/.agent-identity-cli-tokens.json`
-- For production use, consider using certificates or Federated Identity Credentials (FIC) instead of client secrets
+- **For production/Kubernetes use**: Use Federated Identity Credentials (FIC) instead of client secrets
+  - Use `add-federated-credential` to configure workload identity for Kubernetes pods
+  - See `WORKLOAD-IDENTITY-GUIDE.md` for complete setup instructions
 - Both config files contain sensitive data - protect them appropriately
 - Use `logout` command to clear cached tokens when switching accounts

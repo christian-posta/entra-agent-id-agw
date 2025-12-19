@@ -814,6 +814,268 @@ def configure_agent_claims_cmd(
         raise typer.Exit(1)
 
 
+@app.command("add-federated-credential")
+def add_federated_credential(
+    blueprint_name: Optional[str] = typer.Argument(None, help="Name of the locally stored blueprint"),
+    issuer: str = typer.Option(..., "--issuer", "-i", help="OIDC Issuer URL (e.g., Kubernetes OIDC provider)"),
+    subject: str = typer.Option(..., "--subject", "-s", help="Subject claim (e.g., system:serviceaccount:namespace:sa-name)"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Credential name (default: auto-generated from subject)"),
+    audience: str = typer.Option("api://AzureADTokenExchange", "--audience", "-a", help="Token audience"),
+    description: str = typer.Option("", "--description", help="Optional description"),
+    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Blueprint client ID (instead of stored name)"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication"),
+) -> None:
+    """Add a Federated Identity Credential to a Blueprint for workload identity.
+    
+    This enables Kubernetes workload identity authentication, allowing pods
+    with a specific service account to authenticate as the Blueprint without
+    needing a client secret.
+    
+    The subject claim format for Kubernetes service accounts is:
+        system:serviceaccount:<namespace>:<service-account-name>
+    
+    Examples:
+    
+        # Using stored blueprint name
+        python -m agent_cli.main add-federated-credential "My Blueprint" \\
+            --issuer "https://oidc.example.com" \\
+            --subject "system:serviceaccount:entra-demo:sidecar-sa"
+        
+        # Using blueprint client ID directly
+        python -m agent_cli.main add-federated-credential \\
+            --blueprint-id "abc123-..." \\
+            --issuer "https://oidc.example.com" \\
+            --subject "system:serviceaccount:entra-demo:sidecar-sa" \\
+            --name "kind-workload-identity"
+    
+    See WORKLOAD-IDENTITY-GUIDE.md for detailed setup instructions.
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Determine blueprint client ID
+    bp_client_id: Optional[str] = None
+    bp_display_name: Optional[str] = None
+    
+    if blueprint_id:
+        bp_client_id = blueprint_id
+    elif blueprint_name:
+        blueprint = config.get_blueprint(blueprint_name)
+        if not blueprint:
+            console.print(f"[red]Blueprint '{blueprint_name}' not found in local config.[/red]")
+            console.print("Use 'list-blueprints' to see available blueprints, or use --blueprint-id.")
+            raise typer.Exit(1)
+        bp_client_id = blueprint.app_id
+        bp_display_name = blueprint_name
+    else:
+        console.print("[red]Error: Either blueprint name or --blueprint-id is required.[/red]")
+        raise typer.Exit(1)
+    
+    # Auto-generate credential name from subject if not provided
+    cred_name = name
+    if not cred_name:
+        # Extract namespace and sa name from subject
+        # subject format: system:serviceaccount:namespace:sa-name
+        parts = subject.split(":")
+        if len(parts) >= 4:
+            namespace = parts[2]
+            sa_name = parts[3]
+            cred_name = f"{namespace}-{sa_name}-workload-id"
+        else:
+            cred_name = "workload-identity"
+    
+    # Sanitize name (only alphanumeric, hyphens, underscores allowed)
+    import re
+    cred_name = re.sub(r'[^a-zA-Z0-9_-]', '-', cred_name)
+    
+    console.print(f"\n[bold]Adding Federated Identity Credential[/bold]")
+    if bp_display_name:
+        console.print(f"Blueprint: {bp_display_name} ({bp_client_id})")
+    else:
+        console.print(f"Blueprint ID: {bp_client_id}")
+    console.print(f"Credential Name: {cred_name}")
+    console.print(f"Issuer: {issuer}")
+    console.print(f"Subject: {subject}")
+    console.print(f"Audience: {audience}")
+    if description:
+        console.print(f"Description: {description}")
+    console.print()
+    
+    # Authenticate
+    console.print("[bold blue]Step 1: Authenticate with device code flow[/bold blue]")
+    token = get_device_code_token(
+        tid, 
+        scopes=["Application.ReadWrite.All"],
+        force_refresh=force_refresh
+    )
+    if not token:
+        raise typer.Exit(1)
+    
+    console.print("[green]✓ Authentication successful[/green]\n")
+    
+    # Get the Blueprint application object ID
+    console.print("[bold blue]Step 2: Looking up Blueprint application...[/bold blue]")
+    client = GraphClient(token.access_token)
+    blueprint_app = client.get_blueprint_by_app_id(bp_client_id)
+    
+    if not blueprint_app:
+        console.print(f"[red]Blueprint application not found with Client ID: {bp_client_id}[/red]")
+        raise typer.Exit(1)
+    
+    object_id = blueprint_app["id"]
+    display_name = blueprint_app.get("displayName", bp_client_id)
+    console.print(f"[green]✓ Found Blueprint: {display_name}[/green]")
+    console.print(f"  Object ID: {object_id}")
+    
+    # Add the federated identity credential
+    console.print(f"\n[bold blue]Step 3: Adding Federated Identity Credential...[/bold blue]")
+    success, result = client.add_federated_identity_credential(
+        app_object_id=object_id,
+        name=cred_name,
+        issuer=issuer,
+        subject=subject,
+        audiences=[audience],
+        description=description,
+    )
+    
+    if success:
+        console.print(f"\n[bold green]✓ Federated Identity Credential added successfully![/bold green]")
+        console.print(f"\n[bold]Credential Details:[/bold]")
+        console.print(f"  Name: {result.get('name')}")
+        console.print(f"  Issuer: {result.get('issuer')}")
+        console.print(f"  Subject: {result.get('subject')}")
+        console.print(f"  Audiences: {', '.join(result.get('audiences', []))}")
+        if result.get('description'):
+            console.print(f"  Description: {result.get('description')}")
+        console.print(f"\n[dim]The Blueprint can now authenticate using workload identity from the configured issuer.[/dim]")
+    else:
+        error = result.get("error", {})
+        error_msg = error.get("message", str(result))
+        
+        if "already exists" in error_msg.lower() or "conflicting object" in error_msg.lower():
+            console.print(f"[yellow]⚠️  Federated credential '{cred_name}' already exists on this Blueprint.[/yellow]")
+            console.print("[dim]Use 'list-federated-credentials' to view existing credentials.[/dim]")
+        else:
+            console.print(f"[red]Failed to add federated identity credential.[/red]")
+            console.print(f"[red]Error: {error_msg}[/red]")
+            raise typer.Exit(1)
+
+
+@app.command("list-federated-credentials")
+def list_federated_credentials(
+    blueprint_name: Optional[str] = typer.Argument(None, help="Name of the locally stored blueprint"),
+    blueprint_id: Optional[str] = typer.Option(None, "--blueprint-id", help="Blueprint client ID (instead of stored name)"),
+    tenant_id: Optional[str] = typer.Option(None, "--tenant-id", "-t", help="Azure AD tenant ID"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", "-f", help="Force re-authentication"),
+) -> None:
+    """List Federated Identity Credentials on a Blueprint.
+    
+    Shows all federated identity credentials configured on a Blueprint,
+    including workload identity configurations for Kubernetes.
+    
+    Examples:
+    
+        # Using stored blueprint name
+        python -m agent_cli.main list-federated-credentials "My Blueprint"
+        
+        # Using blueprint client ID directly
+        python -m agent_cli.main list-federated-credentials --blueprint-id "abc123-..."
+    """
+    tid = require_tenant_id(tenant_id)
+    config = get_config()
+    
+    # Determine blueprint client ID
+    bp_client_id: Optional[str] = None
+    bp_display_name: Optional[str] = None
+    
+    if blueprint_id:
+        bp_client_id = blueprint_id
+    elif blueprint_name:
+        blueprint = config.get_blueprint(blueprint_name)
+        if not blueprint:
+            console.print(f"[red]Blueprint '{blueprint_name}' not found in local config.[/red]")
+            console.print("Use 'list-blueprints' to see available blueprints, or use --blueprint-id.")
+            raise typer.Exit(1)
+        bp_client_id = blueprint.app_id
+        bp_display_name = blueprint_name
+    else:
+        console.print("[red]Error: Either blueprint name or --blueprint-id is required.[/red]")
+        raise typer.Exit(1)
+    
+    console.print(f"\n[bold]Listing Federated Identity Credentials[/bold]")
+    if bp_display_name:
+        console.print(f"Blueprint: {bp_display_name} ({bp_client_id})")
+    else:
+        console.print(f"Blueprint ID: {bp_client_id}")
+    console.print()
+    
+    # Authenticate
+    console.print("[bold blue]Authenticating...[/bold blue]")
+    token = get_device_code_token(
+        tid, 
+        scopes=["Application.Read.All"],
+        force_refresh=force_refresh
+    )
+    if not token:
+        raise typer.Exit(1)
+    
+    # Get the Blueprint application object ID
+    console.print("[bold blue]Looking up Blueprint application...[/bold blue]")
+    client = GraphClient(token.access_token)
+    blueprint_app = client.get_blueprint_by_app_id(bp_client_id)
+    
+    if not blueprint_app:
+        console.print(f"[red]Blueprint application not found with Client ID: {bp_client_id}[/red]")
+        raise typer.Exit(1)
+    
+    object_id = blueprint_app["id"]
+    display_name = blueprint_app.get("displayName", bp_client_id)
+    console.print(f"[green]✓ Found Blueprint: {display_name}[/green]\n")
+    
+    # List federated identity credentials
+    fics = client.list_federated_identity_credentials(object_id)
+    
+    if not fics:
+        console.print("[yellow]No federated identity credentials found on this Blueprint.[/yellow]")
+        console.print("[dim]Use 'add-federated-credential' to add one for workload identity.[/dim]")
+        return
+    
+    # Display in a table
+    table = Table(title=f"Federated Identity Credentials on '{display_name}'")
+    table.add_column("Name", style="cyan")
+    table.add_column("Subject", style="green")
+    table.add_column("Issuer", style="dim", max_width=50)
+    table.add_column("Audiences", style="yellow")
+    
+    for fic in fics:
+        audiences = ", ".join(fic.get("audiences", []))
+        # Truncate issuer if too long
+        issuer_val = fic.get("issuer", "N/A")
+        if len(issuer_val) > 50:
+            issuer_val = issuer_val[:47] + "..."
+        
+        table.add_row(
+            fic.get("name", "N/A"),
+            fic.get("subject", "N/A"),
+            issuer_val,
+            audiences,
+        )
+    
+    console.print(table)
+    
+    # Show detailed view
+    console.print(f"\n[bold]Details ({len(fics)} credential(s)):[/bold]")
+    for fic in fics:
+        console.print(f"\n[cyan]• {fic.get('name')}[/cyan]")
+        console.print(f"  ID: {fic.get('id')}")
+        console.print(f"  Issuer: {fic.get('issuer')}")
+        console.print(f"  Subject: {fic.get('subject')}")
+        console.print(f"  Audiences: {', '.join(fic.get('audiences', []))}")
+        if fic.get("description"):
+            console.print(f"  Description: {fic.get('description')}")
+
+
 @app.command("config")
 def show_config(
     path: bool = typer.Option(False, "--path", "-p", help="Show config file path only"),

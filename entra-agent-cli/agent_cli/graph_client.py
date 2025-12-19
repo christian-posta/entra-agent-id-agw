@@ -605,6 +605,117 @@ class GraphClient:
         console.print(f"[yellow]Permission '{permission_name}' not found in Microsoft Graph[/yellow]")
         return None
 
+    def get_blueprint_by_app_id(self, app_id: str) -> Optional[dict]:
+        """Get a Blueprint application by its app ID using Beta API.
+        
+        Note: Agent Blueprints require the Beta Graph API.
+        
+        Args:
+            app_id: Blueprint application (client) ID
+            
+        Returns:
+            Blueprint application dict or None
+        """
+        success, data = self._request(
+            "GET",
+            f"{GRAPH_BETA_URL}/applications?$filter=appId eq '{app_id}'",
+        )
+        
+        if success:
+            values = data.get("value", [])
+            if values:
+                return values[0]
+        return None
+
+    def add_federated_identity_credential(
+        self,
+        app_object_id: str,
+        name: str,
+        issuer: str,
+        subject: str,
+        audiences: list[str],
+        description: str = "",
+    ) -> tuple[bool, Optional[dict]]:
+        """Add a Federated Identity Credential to an application.
+        
+        Note: Agent Blueprints require the Beta Graph API.
+        
+        Args:
+            app_object_id: Application object ID (not app/client ID)
+            name: Unique name for the credential
+            issuer: OIDC issuer URL (e.g., Kubernetes OIDC provider)
+            subject: Subject claim (e.g., system:serviceaccount:namespace:name)
+            audiences: List of allowed audiences (typically ["api://AzureADTokenExchange"])
+            description: Optional description
+            
+        Returns:
+            Tuple of (success, credential_dict or error_dict)
+        """
+        body = {
+            "name": name,
+            "issuer": issuer,
+            "subject": subject,
+            "audiences": audiences,
+        }
+        
+        if description:
+            body["description"] = description
+        
+        success, data = self._request(
+            "POST",
+            f"{GRAPH_BETA_URL}/applications/{app_object_id}/federatedIdentityCredentials",
+            json_data=body,
+        )
+        
+        return success, data
+
+    def list_federated_identity_credentials(self, app_object_id: str) -> list[dict]:
+        """List all Federated Identity Credentials on an application.
+        
+        Note: Agent Blueprints require the Beta Graph API.
+        
+        Args:
+            app_object_id: Application object ID (not app/client ID)
+            
+        Returns:
+            List of federated identity credential dicts
+        """
+        success, data = self._request(
+            "GET",
+            f"{GRAPH_BETA_URL}/applications/{app_object_id}/federatedIdentityCredentials",
+        )
+        
+        if success:
+            return data.get("value", [])
+        
+        console.print(f"[red]Failed to list federated identity credentials: {data}[/red]")
+        return []
+
+    def delete_federated_identity_credential(
+        self,
+        app_object_id: str,
+        credential_id: str,
+    ) -> bool:
+        """Delete a Federated Identity Credential from an application.
+        
+        Args:
+            app_object_id: Application object ID
+            credential_id: Federated credential ID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        success, data = self._request(
+            "DELETE",
+            f"{GRAPH_BETA_URL}/applications/{app_object_id}/federatedIdentityCredentials/{credential_id}",
+        )
+        
+        if success:
+            return True
+        
+        console.print(f"[red]Failed to delete federated identity credential: {data}[/red]")
+        return False
+
 
 def create_full_blueprint(
     access_token: str,
