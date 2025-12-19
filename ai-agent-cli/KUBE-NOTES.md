@@ -44,3 +44,4 @@ Then when you `./run.sh` it will try to acquire all the right tokens and be read
 
 Make sure that the CLIENT_ID from the `$ROOT/.env` matches what's in `$ROOT/ai-agent-cli/.env`
 
+Next step: Dodckerize this stuff and put it into a kube deployemnt and show it working end to end. 
