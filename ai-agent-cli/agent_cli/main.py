@@ -255,6 +255,8 @@ def remove_mcp_server(mcp_manager: MCPManager) -> None:
 def connect_saved_mcp_servers(mcp_manager: MCPManager) -> None:
     """Connect to all saved MCP servers.
     
+    Gracefully handles connection failures - prints a warning and continues.
+    
     Args:
         mcp_manager: MCP manager
     """
@@ -264,7 +266,9 @@ def connect_saved_mcp_servers(mcp_manager: MCPManager) -> None:
     for server in servers:
         if server.enabled:
             console.print(f"[dim]Connecting to MCP server: {server.name}...[/dim]")
-            mcp_manager.add_server(server)
+            if not mcp_manager.add_server(server):
+                console.print(f"[yellow]⚠ Skipping {server.name} - will continue without this MCP server[/yellow]")
+                console.print(f"[dim]  You can remove it with menu option 4, or start the server and restart the CLI[/dim]")
 
 
 @app.command()

@@ -98,15 +98,20 @@ class MCPClient:
         """
         try:
             # Run the async connection in a new event loop
-            return asyncio.get_event_loop().run_until_complete(self._connect_async())
-        except RuntimeError:
-            # If there's no event loop, create one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                return loop.run_until_complete(self._connect_async())
-            finally:
-                pass  # Don't close the loop, we'll need it for subsequent calls
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # If there's no event loop, create one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            return loop.run_until_complete(self._connect_async())
+        except asyncio.CancelledError:
+            console.print(f"[yellow]⚠ Connection to {self.server.name} was cancelled (server may be unavailable)[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"[yellow]⚠ Failed to connect to {self.server.name}: {e}[/yellow]")
+            return False
     
     async def _connect_async(self) -> bool:
         """Async implementation of connect."""
@@ -151,6 +156,9 @@ class MCPClient:
             
             return False
             
+        except asyncio.CancelledError:
+            # Re-raise to be caught by the sync wrapper
+            raise
         except Exception as e:
             error_msg = str(e)
             if "401" in error_msg:
