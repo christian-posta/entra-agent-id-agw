@@ -7,6 +7,9 @@ An interactive CLI AI agent that uses Azure OpenAI with Microsoft Entra authenti
 - **Two Authentication Modes**:
   - **Test Mode (API Key)**: Quick testing with Azure OpenAI API key
   - **Production Mode (Entra OBO)**: Full OBO flow with Agent Identity
+- **Pluggable Token Providers**:
+  - **Direct Mode**: Agent performs T1/T2 token exchange directly
+  - **Sidecar Mode**: Delegates token exchange to Microsoft Entra SDK sidecar
 - **Azure OpenAI Integration**: Chat with GPT models deployed on Azure
 - **MCP Tool Support**: Connect to remote MCP servers via SSE with Bearer token auth
 - **Agent Identity**: OBO tokens carry both agent and user identity for gateway authorization
@@ -14,15 +17,22 @@ An interactive CLI AI agent that uses Azure OpenAI with Microsoft Entra authenti
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│                        AUTH MODES                             │
-├───────────────────────────────────────────────────────────────┤
-│  TEST MODE (api_key)         │  PRODUCTION MODE (entra)       │
-│  • Azure OpenAI: API Key     │  • User login → Blueprint      │
-│  • MCP: No auth              │  • Azure OpenAI: OBO token     │
-│  • Quick testing             │  • MCP/Gateway: OBO token      │
-│                              │  • Full audit trail            │
-└───────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              AUTH MODES                                    │
+├────────────────────────────────────────────────────────────────────────────┤
+│  TEST MODE (api_key)         │  PRODUCTION MODE (entra)                    │
+│  • Azure OpenAI: API Key     │  • User login → Blueprint                   │
+│  • MCP: No auth              │  • Azure OpenAI: OBO token                  │
+│  • Quick testing             │  • MCP/Gateway: OBO token                   │
+│                              │  • Full audit trail                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│                       TOKEN PROVIDER MODES (Entra)                         │
+├────────────────────────────────────────────────────────────────────────────┤
+│  DIRECT (default)            │  SIDECAR                                    │
+│  • Agent does T1/T2 exchange │  • Sidecar does T1/T2 exchange              │
+│  • Requires Blueprint secret │  • No secret needed in agent                │
+│  • Self-contained            │  • Requires sidecar container               │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Production Mode Token Flow
@@ -166,6 +176,72 @@ AGENT_IDENTITY_APP_ID=your-agent-identity-client-id
 # Create with: entra-agent-cli create-mcp-server-app "MCP Tool Server"
 MCP_SERVER_APP_ID=your-mcp-server-client-id
 ```
+
+### Production Mode with Sidecar
+
+Instead of the agent handling token exchange directly, you can delegate to the [Microsoft Entra SDK for AgentID](https://learn.microsoft.com/en-us/entra/msidweb/agent-id-sdk/overview) sidecar. This is useful when:
+
+- Running on Kubernetes with the sidecar pattern
+- You don't want to expose Blueprint secrets to the agent
+- You want centralized token management
+
+```bash
+# .env
+AUTH_MODE=entra
+TOKEN_PROVIDER_MODE=sidecar
+
+# Microsoft Entra ID
+TENANT_ID=your-tenant-id
+
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT=gpt-4o
+
+# Blueprint (still needed for user login scope)
+BLUEPRINT_APP_ID=your-blueprint-client-id
+# Note: BLUEPRINT_CLIENT_SECRET not needed - sidecar handles it
+
+# Agent Identity (optional - sidecar can use its default)
+AGENT_IDENTITY_APP_ID=your-agent-identity-client-id
+
+# Sidecar Configuration
+SIDECAR_URL=http://localhost:5000
+SIDECAR_OPENAI_API_NAME=openai
+SIDECAR_MCP_API_NAME=mcp
+```
+
+#### Sidecar Configuration
+
+The sidecar must be configured with downstream APIs matching the names above. Example sidecar ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sidecar-config
+data:
+  # Azure AD / Entra configuration
+  AzureAd__Instance: "https://login.microsoftonline.com/"
+  AzureAd__TenantId: "${TENANT_ID}"
+  AzureAd__ClientId: "${BLUEPRINT_APP_ID}"
+  
+  # Credential source (workload identity or client secret)
+  AzureAd__ClientCredentials__0__SourceType: "ClientSecret"
+  
+  # Azure OpenAI downstream API
+  DownstreamApis__openai__BaseUrl: "https://your-resource.openai.azure.com/"
+  DownstreamApis__openai__Scopes__0: "https://cognitiveservices.azure.com/.default"
+  DownstreamApis__openai__RequestAppToken: "false"
+  
+  # MCP Server downstream API
+  DownstreamApis__mcp__BaseUrl: "https://your-mcp-gateway/"
+  DownstreamApis__mcp__Scopes__0: "api://${MCP_SERVER_APP_ID}/.default"
+  DownstreamApis__mcp__RequestAppToken: "false"
+  
+  ASPNETCORE_URLS: "http://+:5000"
+```
+
+The agent calls the sidecar's `/AuthorizationHeader/{apiName}` endpoint, passing the user's token as a Bearer token. The sidecar performs the T1/T2 exchange and returns the OBO token.
 
 ### Prerequisites for Production Mode
 
@@ -394,12 +470,13 @@ Found 5 tool(s)
 ai-agent-cli/
 ├── agent_cli/
 │   ├── __init__.py
-│   ├── main.py          # CLI entry point & interactive menu
-│   ├── auth.py          # Device code flow & OBO token exchange
-│   ├── config.py        # Configuration management
-│   ├── models.py        # Data classes
-│   ├── agent.py         # Azure OpenAI agent with tool calling
-│   └── mcp_client.py    # MCP SSE client with Bearer auth
+│   ├── main.py            # CLI entry point & interactive menu
+│   ├── auth.py            # Device code flow & OBO token exchange
+│   ├── token_providers.py # Token provider abstraction (direct & sidecar)
+│   ├── config.py          # Configuration management
+│   ├── models.py          # Data classes
+│   ├── agent.py           # Azure OpenAI agent with tool calling
+│   └── mcp_client.py      # MCP SSE client with Bearer auth
 ├── env.example
 ├── requirements.txt
 └── README.md
@@ -437,3 +514,21 @@ This creates an admin consent grant allowing the Agent Identity to request OBO t
 **Cause**: MCP server/gateway rejected the Bearer token.
 
 **Solution**: Ensure the gateway is configured to accept tokens from the Agent Identity.
+
+### "Failed to connect to sidecar"
+
+**Cause**: Sidecar is not running or not reachable.
+
+**Solution**: 
+- Verify the sidecar container is running: `kubectl get pods`
+- Check the `SIDECAR_URL` configuration (default: `http://localhost:5000`)
+- Test sidecar health: `curl http://localhost:5000/healthz`
+
+### "Sidecar request failed: HTTP 401/403"
+
+**Cause**: Sidecar rejected the user's token or cannot perform the OBO exchange.
+
+**Solution**:
+- Verify the sidecar's Blueprint configuration matches your `BLUEPRINT_APP_ID`
+- Ensure the sidecar has the Blueprint client secret configured
+- Check that the downstream API names (`SIDECAR_OPENAI_API_NAME`, `SIDECAR_MCP_API_NAME`) match the sidecar ConfigMap

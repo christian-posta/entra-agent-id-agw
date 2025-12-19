@@ -22,7 +22,8 @@ from .auth import (
 from .config import get_config
 from .models import MCPServer, TokenResult
 from .mcp_client import MCPManager
-from .agent import Agent, create_agent_with_api_key, create_agent_with_obo_token
+from .agent import Agent, create_agent_with_api_key, create_agent_with_obo_token, create_agent_with_token_provider
+from .token_providers import create_token_provider, TokenProvider, DirectTokenProvider, SidecarTokenProvider
 
 
 app = typer.Typer(
@@ -283,14 +284,23 @@ def run(
         console.print("  - AZURE_OPENAI_ENDPOINT")
         console.print("  - AZURE_OPENAI_DEPLOYMENT")
         console.print("  - AZURE_OPENAI_API_KEY")
-        console.print("\nFor Entra mode (production with OBO), set:")
+        console.print("\nFor Entra mode with direct token exchange, set:")
         console.print("  - AUTH_MODE=entra")
+        console.print("  - TOKEN_PROVIDER_MODE=direct")
         console.print("  - TENANT_ID")
         console.print("  - AZURE_OPENAI_ENDPOINT")
         console.print("  - AZURE_OPENAI_DEPLOYMENT")
         console.print("  - BLUEPRINT_APP_ID")
         console.print("  - BLUEPRINT_CLIENT_SECRET")
         console.print("  - AGENT_IDENTITY_APP_ID")
+        console.print("\nFor Entra mode with sidecar, set:")
+        console.print("  - AUTH_MODE=entra")
+        console.print("  - TOKEN_PROVIDER_MODE=sidecar")
+        console.print("  - TENANT_ID")
+        console.print("  - AZURE_OPENAI_ENDPOINT")
+        console.print("  - AZURE_OPENAI_DEPLOYMENT")
+        console.print("  - BLUEPRINT_APP_ID")
+        console.print("  - SIDECAR_URL (default: http://localhost:5000)")
         raise typer.Exit(1)
     
     endpoint, deployment, api_version = require_azure_openai_config()
@@ -321,7 +331,8 @@ def run(
     
     else:
         # Production mode: Entra OBO authentication
-        console.print("[bold blue]Running in PRODUCTION MODE (Entra OBO)[/bold blue]\n")
+        provider_mode = config.token_provider_mode
+        console.print(f"[bold blue]Running in PRODUCTION MODE (Entra OBO, provider={provider_mode})[/bold blue]\n")
         
         # Step 1: User login with Blueprint scope
         console.print("[bold]Step 1: User Authentication[/bold]")
@@ -340,54 +351,64 @@ def run(
         username = get_current_username(config.tenant_id)
         console.print(f"[green]✓ Logged in as: {username}[/green]\n")
         
-        # Step 2: Create OBO Token Manager
-        console.print("[bold]Step 2: Initializing OBO Token Manager[/bold]")
-        obo_manager = OBOTokenManager(
-            tenant_id=config.tenant_id,
-            blueprint_app_id=config.blueprint_app_id,
-            blueprint_client_secret=config.blueprint_client_secret,
-            agent_identity_app_id=config.agent_identity_app_id,
-            user_token=user_token.access_token,
-        )
+        # Step 2: Create Token Provider based on mode
+        console.print(f"[bold]Step 2: Initializing Token Provider ({provider_mode} mode)[/bold]")
+        
+        token_provider: TokenProvider
+        if provider_mode == "sidecar":
+            token_provider = create_token_provider(
+                mode="sidecar",
+                sidecar_url=config.sidecar_url,
+                sidecar_openai_api_name=config.sidecar_openai_api_name,
+                sidecar_mcp_api_name=config.sidecar_mcp_api_name,
+                agent_identity_app_id=config.agent_identity_app_id,  # Optional for sidecar
+            )
+        else:
+            token_provider = create_token_provider(
+                mode="direct",
+                tenant_id=config.tenant_id,
+                blueprint_app_id=config.blueprint_app_id,
+                blueprint_client_secret=config.blueprint_client_secret,
+                agent_identity_app_id=config.agent_identity_app_id,
+                mcp_server_app_id=config.mcp_server_app_id,
+            )
+        
+        # Initialize provider with user token
+        if not token_provider.initialize(user_token.access_token):
+            console.print("[red]Failed to initialize token provider.[/red]")
+            raise typer.Exit(1)
+        
+        console.print()
         
         # Step 3: Get OBO token for Azure OpenAI
         console.print("[bold]Step 3: Getting OBO token for Azure OpenAI[/bold]")
-        aoai_token = obo_manager.get_azure_openai_token()
+        aoai_token_str = token_provider.get_openai_token()
         
-        if not aoai_token:
+        if not aoai_token_str:
             console.print("[red]Failed to get OBO token for Azure OpenAI.[/red]")
             console.print("[yellow]Hint: Ensure admin consent is granted for the Agent Identity.[/yellow]")
             raise typer.Exit(1)
         
+        # Create TokenResult for compatibility with existing agent code
+        aoai_token = TokenResult(access_token=aoai_token_str)
         console.print("[green]✓ Azure OpenAI OBO token acquired[/green]\n")
         
         # Step 4: Get OBO token for MCP Server (if configured)
-        mcp_token = None
-        if config.mcp_server_app_id:
-            console.print("[bold]Step 4: Getting OBO token for MCP Server[/bold]")
-            console.print(f"[dim]MCP Server App ID: {config.mcp_server_app_id}[/dim]")
-            
-            mcp_scope = f"api://{config.mcp_server_app_id}/.default"
-            mcp_token = obo_manager.get_token_for_scope(mcp_scope)
-            
-            if mcp_token:
-                console.print("[green]✓ MCP Server OBO token acquired[/green]\n")
-            else:
-                console.print("[yellow]Warning: Could not get MCP Server OBO token.[/yellow]")
-                console.print("[yellow]MCP calls will not have authentication.[/yellow]\n")
+        console.print("[bold]Step 4: Getting OBO token for MCP Server[/bold]")
+        mcp_token_str = token_provider.get_mcp_token()
+        
+        if mcp_token_str:
+            console.print("[green]✓ MCP Server OBO token acquired[/green]\n")
         else:
-            console.print("[dim]Step 4: No MCP_SERVER_APP_ID configured, MCP calls will not have OBO tokens[/dim]\n")
+            console.print("[yellow]Warning: Could not get MCP Server OBO token.[/yellow]")
+            console.print("[yellow]MCP calls will not have authentication.[/yellow]\n")
         
-        # Step 5: Create MCP manager with OBO token provider
+        # Step 5: Create MCP manager with token provider
         # The token provider returns the access token string for MCP gateway authentication
-        def mcp_token_provider() -> Optional[str]:
-            if not config.mcp_server_app_id:
-                return None
-            mcp_scope = f"api://{config.mcp_server_app_id}/.default"
-            token = obo_manager.get_token_for_scope(mcp_scope)
-            return token.access_token if token else None
+        def mcp_token_provider_func() -> Optional[str]:
+            return token_provider.get_mcp_token()
         
-        mcp_manager = MCPManager(token_provider=mcp_token_provider)
+        mcp_manager = MCPManager(token_provider=mcp_token_provider_func)
         connect_saved_mcp_servers(mcp_manager)
         
         # Step 6: Create agent with OBO token
@@ -429,8 +450,8 @@ def run(
     # Cleanup
     if mcp_manager:
         mcp_manager.disconnect_all()
-    if obo_manager:
-        obo_manager.clear_cache()
+    if 'token_provider' in locals() and hasattr(token_provider, 'clear_cache'):
+        token_provider.clear_cache()
 
 
 @app.command()
@@ -446,6 +467,7 @@ def config_show() -> None:
     
     table.add_row("Config file", str(config.config_path))
     table.add_row("Auth mode", config.auth_mode)
+    table.add_row("Token provider mode", config.token_provider_mode)
     table.add_row("", "")
     
     # Entra settings
@@ -456,6 +478,14 @@ def config_show() -> None:
     table.add_row("Agent Identity App ID", config.agent_identity_app_id or "[dim]Not set[/dim]")
     table.add_row("MCP Server App ID", config.mcp_server_app_id or "[dim]Not set[/dim]")
     table.add_row("", "")
+    
+    # Sidecar settings (only show if sidecar mode)
+    if config.token_provider_mode == "sidecar":
+        table.add_row("[bold]Sidecar[/bold]", "")
+        table.add_row("Sidecar URL", config.sidecar_url)
+        table.add_row("OpenAI API Name", config.sidecar_openai_api_name)
+        table.add_row("MCP API Name", config.sidecar_mcp_api_name)
+        table.add_row("", "")
     
     # Azure OpenAI settings
     table.add_row("[bold]Azure OpenAI[/bold]", "")

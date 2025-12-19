@@ -50,7 +50,7 @@ cd kubernetes
 Get my user token with scopes for blueprint:
 
 ```bash
-source .env
+BLUEPRINT_CLIENT_ID=<id-here>
 az logout
 az login --tenant "5e7d8166-7876-4755-a1a4-b476d4a344f6" --scope "api://$BLUEPRINT_CLIENT_ID/access_as_user"
 TOKEN=$(az account get-access-token --resource "api://$BLUEPRINT_CLIENT_ID" --query accessToken -o tsv)

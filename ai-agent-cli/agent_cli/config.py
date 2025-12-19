@@ -48,6 +48,14 @@ class Config:
         
         # MCP Server for OBO tokens (audience for MCP/Gateway calls)
         self._mcp_server_app_id_env = os.getenv("MCP_SERVER_APP_ID")
+        
+        # Token Provider Mode: "direct" (default) or "sidecar"
+        self._token_provider_mode_env = os.getenv("TOKEN_PROVIDER_MODE", "direct")
+        
+        # Sidecar configuration (only used if TOKEN_PROVIDER_MODE=sidecar)
+        self._sidecar_url_env = os.getenv("SIDECAR_URL", "http://localhost:5000")
+        self._sidecar_openai_api_name_env = os.getenv("SIDECAR_OPENAI_API_NAME", "openai")
+        self._sidecar_mcp_api_name_env = os.getenv("SIDECAR_MCP_API_NAME", "mcp")
     
     def _load_config(self) -> None:
         """Load configuration from file."""
@@ -198,6 +206,74 @@ class Config:
         self._data["mcp_server_app_id"] = value
         self._save_config()
     
+    # Token Provider Mode
+    @property
+    def token_provider_mode(self) -> str:
+        """Get token provider mode from config or environment.
+        
+        Returns 'direct' (default) or 'sidecar'.
+        - direct: Agent performs T1/T2 token exchange directly
+        - sidecar: Agent delegates token exchange to Entra SDK sidecar
+        """
+        return self._data.get("token_provider_mode") or self._token_provider_mode_env or "direct"
+    
+    @token_provider_mode.setter
+    def token_provider_mode(self, value: str) -> None:
+        """Set token provider mode in config."""
+        if value not in ("direct", "sidecar"):
+            raise ValueError("token_provider_mode must be 'direct' or 'sidecar'")
+        self._data["token_provider_mode"] = value
+        self._save_config()
+    
+    # Sidecar URL
+    @property
+    def sidecar_url(self) -> str:
+        """Get sidecar URL from config or environment.
+        
+        Default: http://localhost:5000
+        """
+        return self._data.get("sidecar_url") or self._sidecar_url_env or "http://localhost:5000"
+    
+    @sidecar_url.setter
+    def sidecar_url(self, value: str) -> None:
+        """Set sidecar URL in config."""
+        self._data["sidecar_url"] = value
+        self._save_config()
+    
+    # Sidecar OpenAI API Name
+    @property
+    def sidecar_openai_api_name(self) -> str:
+        """Get sidecar OpenAI API name from config or environment.
+        
+        This is the name of the downstream API configured in the sidecar
+        for Azure OpenAI / Cognitive Services.
+        Default: openai
+        """
+        return self._data.get("sidecar_openai_api_name") or self._sidecar_openai_api_name_env or "openai"
+    
+    @sidecar_openai_api_name.setter
+    def sidecar_openai_api_name(self, value: str) -> None:
+        """Set sidecar OpenAI API name in config."""
+        self._data["sidecar_openai_api_name"] = value
+        self._save_config()
+    
+    # Sidecar MCP API Name
+    @property
+    def sidecar_mcp_api_name(self) -> str:
+        """Get sidecar MCP API name from config or environment.
+        
+        This is the name of the downstream API configured in the sidecar
+        for MCP server calls.
+        Default: mcp
+        """
+        return self._data.get("sidecar_mcp_api_name") or self._sidecar_mcp_api_name_env or "mcp"
+    
+    @sidecar_mcp_api_name.setter
+    def sidecar_mcp_api_name(self, value: str) -> None:
+        """Set sidecar MCP API name in config."""
+        self._data["sidecar_mcp_api_name"] = value
+        self._save_config()
+    
     # MCP Servers
     def add_mcp_server(self, server: MCPServer) -> None:
         """Add an MCP server to config.
@@ -264,15 +340,24 @@ class Config:
                 self.azure_openai_api_key
             )
         else:  # entra mode
-            # Entra mode: need tenant, endpoint, deployment, and OBO config
-            return bool(
+            # Common requirements for Entra mode
+            base_config = bool(
                 self.tenant_id and 
                 self.azure_openai_endpoint and 
                 self.azure_openai_deployment and
-                self.blueprint_app_id and
-                self.blueprint_client_secret and
-                self.agent_identity_app_id
+                self.blueprint_app_id
             )
+            
+            if self.token_provider_mode == "sidecar":
+                # Sidecar mode: don't need blueprint secret (sidecar has it)
+                # Agent identity is optional (sidecar can have default)
+                return base_config and bool(self.sidecar_url)
+            else:
+                # Direct mode: need blueprint secret and agent identity
+                return base_config and bool(
+                    self.blueprint_client_secret and
+                    self.agent_identity_app_id
+                )
 
 
 # Global config instance
