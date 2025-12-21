@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+.eggs/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Environment files (should be mounted or passed as env vars in k8s)
+.env
+*.env.local
+*.env.*.local
+
+# Documentation
+README.md
+KUBE-NOTES.md
+*.md
+
+# Makefiles and build artifacts
+Makefile
+Dockerfile
+.dockerignore
+
+# Cache and temp files
+.cache/
+*.log
+.DS_Store
+Thumbs.db
+
+# Test files
+tests/
+test_*.py
+*_test.py
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development scripts (not needed in container)
+run.sh
+
