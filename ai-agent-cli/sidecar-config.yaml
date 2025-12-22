@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-agent-sidecar-config
+  namespace: entra-demo
+data:
+  # Azure AD / Entra configuration
+  AzureAd__Instance: "https://login.microsoftonline.com/"
+  AzureAd__TenantId: "${TENANT_ID}"
+  AzureAd__ClientId: "${BLUEPRINT_APP_ID}"
+  
+  # Credential source type - Use workload identity (file-based token)
+  AzureAd__ClientCredentials__0__SourceType: "SignedAssertionFilePath"
+  # Path where the projected service account token will be mounted
+  AzureAd__ClientCredentials__0__SignedAssertionFileDiskPath: "/var/run/secrets/tokens/azure-identity-token"
+  
+  # Downstream API configuration (example: Microsoft Graph)
+  DownstreamApis__graph__BaseUrl: "https://graph.microsoft.com/v1.0/"
+  DownstreamApis__graph__Scopes__0: "https://graph.microsoft.com/.default"
+  DownstreamApis__graph__RequestAppToken: "true"  
+
+  # Azure OpenAI downstream API
+  # Sidecar will exchange user token for OBO token to call Azure OpenAI
+  # DownstreamApis__openai__BaseUrl: "${AZURE_OPENAI_ENDPOINT}"
+  DownstreamApis__openai__BaseUrl: "http://agentgateway.entra-demo:3000/llm"
+  DownstreamApis__openai__Scopes__0: "https://cognitiveservices.azure.com/.default"
+  DownstreamApis__openai__RequestAppToken: "false"
+  
+  # MCP Server downstream API
+  # Sidecar will exchange user token for OBO token to call MCP Gateway
+  DownstreamApis__mcp__BaseUrl: "https://mcp-gateway/"
+  DownstreamApis__mcp__Scopes__0: "api://${MCP_SERVER_APP_ID}/.default"
+  DownstreamApis__mcp__RequestAppToken: "false"
+  
+  # ASP.NET Core settings
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:5000"
+

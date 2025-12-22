@@ -350,8 +350,8 @@ class Config:
             
             if self.token_provider_mode == "sidecar":
                 # Sidecar mode: don't need blueprint secret (sidecar has it)
-                # Agent identity is optional (sidecar can have default)
-                return base_config and bool(self.sidecar_url)
+                # Agent identity is required (passed to sidecar)
+                return base_config and bool(self.sidecar_url and self.agent_identity_app_id)
             else:
                 # Direct mode: need blueprint secret and agent identity
                 return base_config and bool(

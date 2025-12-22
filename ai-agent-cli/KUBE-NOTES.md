@@ -1,11 +1,9 @@
-Okay, at the moment this is not containerized, but we do have it working with sidecar.
 
-To get it working with sidecar, we need to keep the following in mind:
 
 First, we are using workload identity federation. We can exchange the kubernetes projected SA token for an access token on the blueprint. But to do that, the blueprint we pick $BLUEPRINT_ID must have its federated workload credentials set up. From our helper tool, we can run:
 
 ```bash
-./run.sh add-federated-credential --blueprint-id $BLUEPRINT_ID --issuer https://oidc7de4f053.blob.core.windows.net/oidc --subject "system:serviceaccount:entra-demo:sidecar-sa" --name "kind-entra-workload-identity"
+./run.sh add-federated-credential --blueprint-id $BLUEPRINT_ID --issuer https://oidc7de4f053.blob.core.windows.net/oidc --subject "system:serviceaccount:entra-demo:ai-agent-cli-sa" --name "ai-agent-cli-sa-mapping"
 ```
 
 Things to note:
@@ -44,4 +42,10 @@ Then when you `./run.sh` it will try to acquire all the right tokens and be read
 
 Make sure that the CLIENT_ID from the `$ROOT/.env` matches what's in `$ROOT/ai-agent-cli/.env`
 
-Next step: Dodckerize this stuff and put it into a kube deployemnt and show it working end to end. 
+
+To actually run in k8s, you need to build and load the ai-agent-cli into kind/kubernetes cluster:
+
+```bash
+make k8s-load-kind KIND_CLUSTER=entra-workload-federation
+```
+

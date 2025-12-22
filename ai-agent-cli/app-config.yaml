@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-agent-cli-config
+  namespace: entra-demo
+data:
+  # Authentication mode - using Entra with sidecar
+  AUTH_MODE: "entra"
+  TOKEN_PROVIDER_MODE: "sidecar"
+  
+  # Sidecar configuration
+  SIDECAR_URL: "http://localhost:5000"
+  SIDECAR_OPENAI_API_NAME: "openai"
+  SIDECAR_MCP_API_NAME: "mcp"
+  
+  # Entra configuration
+  TENANT_ID: "${TENANT_ID}"
+  BLUEPRINT_APP_ID: "${BLUEPRINT_APP_ID}"
+  AGENT_IDENTITY_APP_ID: "${AGENT_IDENTITY_APP_ID}"
+  
+  # Azure OpenAI configuration
+  # AZURE_OPENAI_ENDPOINT: "${AZURE_OPENAI_ENDPOINT}"
+  AZURE_OPENAI_ENDPOINT: "http://agentgateway.entra-demo:3000/llm"
+  AZURE_OPENAI_DEPLOYMENT: "${AZURE_OPENAI_DEPLOYMENT}"
+  AZURE_OPENAI_API_VERSION: "${AZURE_OPENAI_API_VERSION}"
+

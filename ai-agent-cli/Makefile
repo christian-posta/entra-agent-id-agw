@@ -13,6 +13,7 @@ DOCKER_PLATFORM ?= linux/amd64
 
 # Kubernetes Configuration
 NAMESPACE ?= default
+KIND_CLUSTER ?= kind
 
 # Colors for output
 GREEN := \033[0;32m
@@ -35,6 +36,7 @@ help: ## Show this help message
 	@echo "  IMAGE_TAG      Docker image tag (default: latest)"
 	@echo "  REGISTRY       Container registry (default: none, local only)"
 	@echo "  DOCKER_PLATFORM Target platform (default: linux/amd64)"
+	@echo "  KIND_CLUSTER   Kind cluster name (default: kind)"
 	@echo ""
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-20s$(NC) %s\n", $$1, $$2}'
@@ -191,12 +193,40 @@ dev-run: ## Run development build
 # Kubernetes Targets
 #------------------------------------------------------------------------------
 k8s-load-kind: ## Load image into kind cluster
-	@echo "$(GREEN)Loading $(FULL_IMAGE):$(IMAGE_TAG) into kind cluster...$(NC)"
-	kind load docker-image $(FULL_IMAGE):$(IMAGE_TAG)
+	@echo "$(GREEN)Loading $(FULL_IMAGE):$(IMAGE_TAG) into kind cluster '$(KIND_CLUSTER)'...$(NC)"
+	kind load docker-image $(FULL_IMAGE):$(IMAGE_TAG) --name $(KIND_CLUSTER)
 	@echo "$(GREEN)✓ Image loaded into kind$(NC)"
 
 k8s-load-minikube: ## Load image into minikube
 	@echo "$(GREEN)Loading $(FULL_IMAGE):$(IMAGE_TAG) into minikube...$(NC)"
 	minikube image load $(FULL_IMAGE):$(IMAGE_TAG)
 	@echo "$(GREEN)✓ Image loaded into minikube$(NC)"
+
+k8s-deploy: ## Deploy to Kubernetes (requires .env file)
+	@echo "$(GREEN)Deploying to Kubernetes...$(NC)"
+	./deploy.sh
+	@echo "$(GREEN)✓ Deployment complete$(NC)"
+
+k8s-delete: ## Delete Kubernetes resources
+	@echo "$(YELLOW)Deleting ai-agent-cli resources...$(NC)"
+	-kubectl delete -f deployment.yaml 2>/dev/null || true
+	-kubectl delete -f app-config.yaml 2>/dev/null || true
+	-kubectl delete -f sidecar-config.yaml 2>/dev/null || true
+	-kubectl delete -f serviceaccount.yaml 2>/dev/null || true
+	@echo "$(GREEN)✓ Resources deleted$(NC)"
+
+k8s-logs: ## Tail logs from the app container
+	kubectl logs -n entra-demo -l app=ai-agent-cli -c app -f
+
+k8s-logs-sidecar: ## Tail logs from the sidecar container
+	kubectl logs -n entra-demo -l app=ai-agent-cli -c sidecar -f
+
+k8s-exec: ## Exec into the app container
+	kubectl exec -it -n entra-demo deploy/ai-agent-cli -c app -- /bin/bash
+
+k8s-status: ## Show Kubernetes deployment status
+	@echo "$(GREEN)Deployment Status:$(NC)"
+	@kubectl get pods -n entra-demo -l app=ai-agent-cli
+	@echo ""
+	@kubectl get deployment -n entra-demo ai-agent-cli
 

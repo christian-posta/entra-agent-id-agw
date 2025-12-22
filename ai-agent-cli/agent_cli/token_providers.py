@@ -158,7 +158,7 @@ class SidecarTokenProvider:
         - SIDECAR_URL
         - SIDECAR_OPENAI_API_NAME
         - SIDECAR_MCP_API_NAME
-        - AGENT_IDENTITY_APP_ID (optional, to pass ?AgentIdentity= param)
+        - AGENT_IDENTITY_APP_ID (to pass ?AgentIdentity= param)
     """
     
     def __init__(

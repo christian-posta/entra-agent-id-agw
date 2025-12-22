@@ -304,6 +304,7 @@ def run(
         console.print("  - AZURE_OPENAI_ENDPOINT")
         console.print("  - AZURE_OPENAI_DEPLOYMENT")
         console.print("  - BLUEPRINT_APP_ID")
+        console.print("  - AGENT_IDENTITY_APP_ID")
         console.print("  - SIDECAR_URL (default: http://localhost:5000)")
         raise typer.Exit(1)
     

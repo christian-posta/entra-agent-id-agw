@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-agent-cli
+  namespace: entra-demo
+  labels:
+    app: ai-agent-cli
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-agent-cli
+  template:
+    metadata:
+      labels:
+        app: ai-agent-cli
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ai-agent-cli-sa
+      
+      containers:
+      # AI Agent CLI application container
+      - name: app
+        image: ceposta/ai-agent-cli:latest
+        imagePullPolicy: IfNotPresent
+        
+        # Keep container running - the CLI is interactive
+        # In production, you might run a specific command or use a web interface
+        command: ["sleep", "infinity"]
+        
+        # Load environment from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: ai-agent-cli-config
+        
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      
+      # Entra SDK Sidecar - handles OBO token exchange
+      - name: sidecar
+        image: mcr.microsoft.com/entra-sdk/auth-sidecar:1.0.0-azurelinux3.0-distroless
+        ports:
+        - containerPort: 5000
+          name: http
+        
+        # Load sidecar configuration
+        envFrom:
+        - configMapRef:
+            name: ai-agent-sidecar-config
+        
+        volumeMounts:
+        # Mount the projected service account token for workload identity
+        - name: azure-identity-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+        
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 5000
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 5000
+            httpHeaders:
+            - name: Host
+              value: localhost
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      
+      volumes:
+      # Projected service account token with specific audience for Azure token exchange
+      - name: azure-identity-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: azure-identity-token
+              expirationSeconds: 3600
+              audience: api://AzureADTokenExchange
+

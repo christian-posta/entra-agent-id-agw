@@ -1,0 +1,172 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentgateway
+  namespace: entra-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentgateway
+  template:
+    metadata:
+      labels:
+        app: agentgateway
+    spec:
+      containers:
+      - name: agentgateway
+        image: ghcr.io/agentgateway/agentgateway:0.10.5
+        imagePullPolicy: Always
+        command: ["/app/agentgateway"] 
+        args:
+          - "-f"
+          - "/app/config.yaml"
+        volumeMounts:
+          - name: config
+            mountPath: /app/config.yaml
+            subPath: config.yaml
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      volumes:
+        - name: config
+          configMap:
+            name: agentgateway-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentgateway
+  namespace: entra-demo
+spec:
+  selector:
+    app: agentgateway
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentgateway-config
+  namespace: entra-demo
+data:
+  config.yaml: |-
+    # yaml-language-server: $schema=../../schema/local.json
+    config:
+      metrics:
+        fields:
+          add:
+            user_id: "jwt.sub" 
+            user_name: 'jwt.preferred_username'
+      logging:
+        fields:
+          add:
+            user_id: "jwt.sub" 
+            user_name: 'jwt.name'
+            authenticated: 'jwt.sub != null'
+            jwt_act: "jwt.act"
+            token_issuer: 'jwt.iss'
+            token_audience: 'jwt.aud'       
+    binds:
+    - port: 3000
+      listeners:
+      - routes:
+
+        # ------------------------------------------------------------
+        # OpenAI route
+        # ------------------------------------------------------------
+          - name: openai
+            matches:
+            - path:
+                pathPrefix: /llm
+            backends:
+            - ai:
+                name: openai
+                hostOverride: "ceposta-azure-openai.openai.azure.com:443"
+                provider:
+                  openAI:
+                    model: gpt-4.1-mini
+
+            policies:
+              urlRewrite:
+                authority:
+                  full: "ceposta-azure-openai.openai.azure.com"
+                path:
+                  prefix: ""
+
+              backendTLS: {}                 
+              backendAuth:  
+                passthrough: {}
+              cors:
+                allowOrigins: ["*"]
+                allowHeaders: ["*"]
+                allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+
+              ## We require JWT auth for calling this route
+              ## it is expected to be coming from an SSO IdP  
+              jwtAuth:
+                mode: strict
+                issuer: https://sts.windows.net/5e7d8166-7876-4755-a1a4-b476d4a344f6/
+                audiences: [https://cognitiveservices.azure.com]
+                jwks:
+                  url: https://login.microsoftonline.com/5e7d8166-7876-4755-a1a4-b476d4a344f6/discovery/v2.0/keys       
+
+              ## We will require JWT for all calls except OPTIONS
+              ## If this is not an OPTIONS request, the jwt.sub must be present
+              authorization:
+                rules:
+
+                  - "jwt.sub != null"     
+        # ------------------------------------------------------------
+        # Microsoft Entra route
+        # ------------------------------------------------------------
+          - matches:
+            - path:
+                exact: /mcp
+            backends:
+            - mcp:
+                targets:
+                - name: microsoft
+                  mcp:
+                    host: "learn.microsoft.com"
+                    port: 443
+                    path: "/api/mcp"              
+                - name: exa-ai
+                  mcp:
+                    host: "mcp.exa.ai"
+                    port: 443
+                    path: "/mcp"
+            policies:
+              jwtAuth:
+                mode: strict
+                issuer: https://sts.windows.net/5e7d8166-7876-4755-a1a4-b476d4a344f6/
+                audiences: [api://ec791040-80f8-4129-bf34-96a0e0672c96]
+                jwks:
+                  url: https://login.microsoftonline.com/5e7d8166-7876-4755-a1a4-b476d4a344f6/discovery/v2.0/keys            
+              mcpAuthorization:
+                rules:
+                # This has to be OBO a user, and called by an AI agent identity we recognize
+                - "jwt.appid == '65027832-f56f-4d8e-93aa-a09113ba2d47' && '11' in jwt.xms_act_fct.split(' ')"
+              cors:
+                allowOrigins:
+                - "*"
+                allowHeaders:
+                - "*"
+                allowMethods:
+                - "*"
+              backendTLS: {}     
+              requestHeaderModifier:
+                remove:
+                - x-forwarded-for
+                - x-forwarded-host
+                - x-forwarded-proto
