@@ -5,6 +5,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Two: Agent On-Behalf-Of User
 
+> **Source Code**: This part covers OBO token exchange mechanisms. For working examples of OBO flows, see the [`entra-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) and [`ai-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
+
 Microsoft Entra Agent ID is an extension to Entra that adds agent identity as a first class citizen. In the previous section, we saw the mechanism for how this works:
 
 ![Blueprint impersonation token exchange](./images/t1-t2-exchange.png)
@@ -322,6 +324,10 @@ Now let's dig into these claims to see what it represents:
 * **xms_par_app_azp*: `85075aa5-1d73-42de-812a-95348218e4b2` this agent was created by the blueprint
 
 With this Agent ID token, we can call the Graph API (or we could have scoped it to a different app, MCP server, or agent) and that target (Graph in this case) would know that this is indeed an AI agent calling it **on behalf of a user**. Agent OBO specific policy can be enforced at this point. 
+
+---
+
+**Previous:** [Part One: Understanding Entra Agent ID](PART-1.md) | **Next:** [Part Three: Running on Kubernetes](PART-3.md)
 
 ## Wrapping up
 

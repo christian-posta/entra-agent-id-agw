@@ -6,6 +6,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part One: Understanding Entra Agent ID
 
+> **Source Code**: This part covers the conceptual foundations of Entra Agent ID. For implementation examples, see the [`entra-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) and [`kubernetes/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
+
 Entra Agent ID builds on existing Entra capabilities around User and Service Account identity and policy and extends to natively support AI agents. To understand Entra Agent ID better, we need a little understanding about how Entra works today. 
 
 ## Microsoft Entra Identities
@@ -488,3 +490,7 @@ These values are Microsoft Graph permissions (scopes/app roles) that control wha
 - The standard Microsoft Graph “sign-in and read user profile” permission.  
 - Allows basic sign‑in, reading the signed‑in user’s own profile (name, email, object ID, etc.), and in some cases discovery of basic tenant information; it does not grant directory‑wide user listing or write capabilities.
 
+
+---
+
+**Next:** [Part Two: Agent On-Behalf-Of User](PART-2.md)

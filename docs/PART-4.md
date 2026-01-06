@@ -4,6 +4,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Four: Workload Identity Federation
 
+> **Source Code**: This part covers workload identity federation setup. The Kubernetes configurations for workload identity federation can be found in the [`kubernetes/`](https://github.com/christian-posta/entra-agent-id-agw) and [`workload-id-kind/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
+
 In the previous post, we saw how to use the [microsoft-web-identity](https://github.com/AzureAD/microsoft-identity-web) sidecar to shield the agent app from doing complex token exchanges and dealing with blueprint's sensitive tokens. But we still had to configure client credentials for the blueprint to get its access tokens. We should **never use client credentials in a production environment** ([or API keys](https://blog.christianposta.com/api-keys-are-a-bad-idea-for-enterprise-llm-agent-and-mcp-access/)!). 
 
 Instead of client credentials, let's configure [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation). This allows us to use a trusted token already baked into the platform (ie, like a Kubrenetes service-account token) and have Entra trust that. That allows us to get rid of the client credential config/envvar stuff and seamlessly integrate the Kubernetes workloads / service accounts with an Agent Blueprint. This solves some of the problems from the previous post (Post Three) but not all. 
@@ -450,5 +452,9 @@ Additionally:
 * An AI agent needs to make calls to an AI model. How do we get credentials to do that?
 * An AI agent may need to call out to MCP tools. Those aren't agents. How do we enforce policy based on user/agent identity?
 * How do we get any observability here? How do we know what's being called?
+
+---
+
+**Previous:** [Part Three: Running on Kubernetes](PART-3.md) | **Next:** [Part Five: LLM and MCP with Entra Agent ID and AgentGateway](PART-5.md)
 
 So far we've been exploring this through a very simplistic app (sleep/curl). But what if we have a more powerful AI agent deployed in the container? And we want to call out to MCP tools? Let's look at what a more realistic app looks like and then we can see how to alleviate the aforementioned problems in Part Five. 
