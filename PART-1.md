@@ -2,7 +2,7 @@
 
 [Microsoft Entra Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/) is a new feature for [Microsoft Entra](https://learn.microsoft.com/en-us/entra) that adds support for "AI Agent" workloads. In this context, an AI agent is a stateful service that can respond to tasks and work toward specified goals by using an AI model (often an LLM). An AI agent may be spun up dynamically and destroyed after its task has completed. It may last for a few seconds or many hours/days. Enterprise policy and compliance requires we know when agents make decisions and take actions. Since AI agents rely on AI models, they are non-deterministic and may take actions they originate or decide. For this reason, we need to be able to identify which workloads are AI agents, and understand what actions they take, why do they take them, and where an Agent got authorization to take the actions it did. I've written in the past about the need for [strong agent identity](https://blog.christianposta.com/do-we-even-need-agent-identity/) and the ability for agents to act as the user (impersonation) [or on behalf of the user (delegation)](https://blog.christianposta.com/agent-identity-impersonation-or-delegation/). 
 
-This is part of a multi-part series where we dig into how Microsoft Entra Agent ID gives an option for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes for Agent and MCP workloads outside of Azure. Azure has managed identities but they work within the Azure ecosystem, but if we want to expand past that, we need to understand how Agent ID works. If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
+This is part of a multi-part series where we dig into how Microsoft Entra Agent ID gives an option for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes for Agent and MCP workloads in AKS or potentiall outside of Azure. Azure has managed identities but they work within the Azure ecosystem, but if we want to expand past that, we need to understand how Agent ID works. If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
 
 # Part One: Understanding Entra Agent ID
 
@@ -26,7 +26,6 @@ Lastly, Entra has the idea of an *app registration*. If you're familiar with OAu
 
 So, to recap: An Azure tenant is the "root" of the identity directory, where everything lives. App registrations define what an app looks like, but any roles/permissions get assigned to the service principal. The service principal (or user principal) is what gets evaluated for runtime enforcement. If you need more detail, please [check out the docs](https://learn.microsoft.com/en-us/entra/identity-platform/). 
 
-NOTE: I purposefully didn't cover Managed Identities much. Managed identity is a special service principal that the Azure platform manages for you (ie, you don't see any secrets/credentials). This is available on compute/platform services like VMs, AKS, Functions, Service Bus, etc.  This series of articles is primarily concerned with Agent ID outside of the Azure platform where workloads may not use managed identity. 
 
 ## Entra Agent ID
 
@@ -34,17 +33,18 @@ NOTE: I purposefully didn't cover Managed Identities much. Managed identity is a
 
 You can think of these loosely related to "Blueprint --> App Registration" and "Agent Identity --> service principal" from the previous section. The Blueprint is a "class" or "factory" that creates actual agent identities. 
 
-But a **Agent Identity Blueprint** differs from an app registration in a few ways. First, it acts as a "class of agent" which has a special "blueprint principal" with special permissions to do one thing: **create instances of agent identities**. That means it has an OAuth client ID, credentials and Graph permissions (ie, `AgentIdentity.CreateAsManager`). 
+But a **Agent Identity Blueprint** differs from an app registration in a few ways. First, it acts as a "class of agent" which has a special "blueprint principal" with special permissions to do one thing: **create instances of agent identities**. That means it has an OAuth client ID, credentials and Graph permissions (ie, `AgentIdentity.CreateAsManager`). And just like a "class" in object oriented programming, a blueprint cannot be instantiated directly as an AI agent. 
 
-When you create a new blueprint in Entra, a corresponding blueprint principal will automatically be created. Second, it can contain delegated permissions that can be inherited by any of the agent identities that get created from this blueprint (hello class inheritance!). Lastly, it can be used to obtain tokens for any of the agent identities it created. FWIW, you cannot assign Azure RBAC roles to blueprints only the agent identities that get created from a blueprint. **Think of an Agent Identity Blueprint as a "class" of agent identity and the actual agent identity as an "object" or "instance"**
+When you create a new blueprint in Entra, a corresponding blueprint principal will automatically be created. Second, it can contain delegated permissions that can be inherited by any of the agent identities that get created from this blueprint (hello class inheritance!). That's the whole point of the blueprint: create agent identities from a template. Lastly, it can be used to obtain tokens for any of the agent identities it created. FWIW, you cannot assign Azure RBAC roles to blueprints only the agent identities that get created from a blueprint. **Think of an Agent Identity Blueprint as a "class" of agent identity and the actual agent identity as an "object" or "instance"**
 
-An **Agent Identity** is a service principal intended to be associated with a specific agent execution. In this case, think of an agent as a **session** with a specific context, potentially memory, tools, access to an LLM, and running a specific workload. In Kubernetes this is likely a specific Pod. It may also be more fine-grained: it may be a specific agent session within a Pod. The granularity will be up to the agent framework used. Some frameworks deploy a single agentt to a Pod. Some use multiple agents within a pod.
+An **Agent Identity** is a service principal intended to be associated with a specific agent execution. In this case, think of an agent as a **session** with a specific context, potentially memory, tools, access to an LLM, and running a specific workload. In Kubernetes this is likely a specific Deployment. It may also be more fine-grained: it could be a specific agent session within a Pod. The granularity will be up to the agent framework used/runtime. Some frameworks deploy a single agent to a Pod. Some use multiple agents within a pod. Entra Agent ID is flexible enought to accomodate these scenarios. There are pros/cons to this, however. Will discuss this in later parts. 
+
 
 ![Overview of Blueprint to Agent Identity relationship](./images/agent-id-tenant.png)
 
-An *agent identity* in Entra Agent ID is a special type of *service principal*: it does not have credentials (ie, client secret, keys, etc) assocaited with it. The only way to get a token for the agent identity is through the blueprint (we'll see an example in a sec). 
+An *agent identity* in Entra Agent ID is a _special type_ of *service principal*: it does not have credentials (ie, client secret, keys, etc) assocaited with it. The only way to get a token for the agent identity is through the blueprint (we'll see an example in a sec). 
 
-So basically: a signle agent blueprint can create many agent identities of the same class or type. There is a 1:many relationship. Just like in a "class" --> "object" for object-oriented programming languages.
+So basically: a single agent blueprint can create many agent identities of the same class or type. There is a 1:many relationship. Just like in a "class" --> "object" for object-oriented programming languages.
 
 ## Why this approach?
 
@@ -77,7 +77,7 @@ A blueprint for this kind of agent may have `User.Read.All` to get information a
 
 ## Getting Hands On
 
-Nothing makes ths more concrete than actually seeing it in action. This section makes to value judgements about how this would work in a real agent platform or Kubernetes, or anything really. This is just to illustrate the underlying concepts from above. The future parts will dig further into what this looks like on Kubernetes. 
+Nothing makes ths more concrete than actually seeing it in action. This section makes no value judgements about how this would work in a real agent platform or Kubernetes, or anything really. This is just to illustrate the underlying concepts from above. The future parts will dig further into what this looks like on Kubernetes. 
 
 We will use [powershell](https://github.com/PowerShell/PowerShell) for the examples in this section. I am on a Mac but you can use [this guide to install for your platform](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell?view=powershell-7.5). 
 
@@ -320,7 +320,7 @@ My Blog Agent                                       f3897825-fd03-45f5-90eb-fdbf
 
 Yay!! We now have a new agent identity with service principal (`f3897825-fd03-45f5-90eb-fdbf26135650`). 
 
-Now, if we want our agent to call another service using its own identity, we will need to blueprint to help us out with that. The agent identity doesn't have any credentials associated with its service principal. We'll need the blueprint to get a token for the agent identity. 
+Now, if we want our agent to call another service using its own identity, we will need the blueprint to help us out with that. The agent identity doesn't have any credentials associated with its service principal. We'll need the blueprint to get a token for the agent identity. 
 
 There is actually a two-step process for the blueprint to do that. The blueprint first gets a token (T1) that represents the relationship between the blueprint and an agent identity. This first token can be given to the agent to assert its identity to exchange for an actual access token (T2) for the agent itself. 
 
@@ -452,7 +452,7 @@ With this Agent ID token, we can call the Graph API (or we could have scoped it 
 
 ## Wrapping up
 
-This (Part One) introduces Entra Agent ID on Kubernetes (outside Azure), how it builds on existing Entra constructs and how to achieve a way to create agent-specific identities. Again, this post is meant purely for educational purposes, no comments yet how this should be used if not on Azure. Azure handles all of this behind the scenes, but if you are looking to use this outside of Azure, stay tuned to the next parts!
+This (Part One) introduces Entra Agent ID, how it builds on existing Entra constructs and how to achieve a way to create agent-specific identities. Again, this post is meant purely for educational purposes, no comments yet how this should be used in a real environment. Azure handles all of this behind the scenes, but if you are looking to use this outside of Azure, stay tuned to the next parts!
 
 ## Appendix A - Graph API Scope Requests for Agent Identity
 
