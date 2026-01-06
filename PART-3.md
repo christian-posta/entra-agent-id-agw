@@ -1,14 +1,14 @@
 # Microsoft Entra Agent ID on Kubernetes
 
-This is part of a multi-part series where we dig into how Microsoft Entra Agent ID gives an option for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes for Agent and MCP workloads outside of Azure. Azure has managed identities but they work within the Azure ecosystem, but if we want to expand past that, we need to understand how Agent ID works. If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
+This is part of a multi-part series where we dig into how Microsoft Entra Agent ID works for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes (not necessarily AKS, but would apply there too) for Agent and MCP workloads.  If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
 
 # Part Three: Running on Kubernetes
 
-In the previous two parts of this series, we looked at the details of setting up Agent Identity Blueprints, creating Agent Identities, and what the full token exchange looks like. This is important to understand what happens behind the scenes. But to be honest, there is a lot of machinery that needs to happen for this to work, right? Running on Azure (ie, Foundry), this all happens behind the scenes for you. If you're running in a non-managed environment, knowing the details is helpful, but let's start moving in the direction of running this on Kubernetes. 
+In the previous two parts of this series, we looked at the details of setting up Agent Identity Blueprints, creating Agent Identities, and what the full token exchange looks like. This is important to understand what happens behind the scenes. But to be honest, there is a lot of machinery that needs to happen for this to work, right? 
 
-In this section we'll look at a helper mechanism that hides some of the details: [The Microsoft Entra SDK for Agent ID](https://learn.microsoft.com/en-us/entra/msidweb/agent-id-sdk/overview). In fact, for container environments, this SDK is intended to run as a sidecar / helper. The sidecar exposes an HTTP service (default http://localhost:5000/) and some endpoints to help automate the token exchanges. 
+In this section we'll look at a helper mechanism that hides **some of the details**: [The Microsoft Entra SDK for Agent ID](https://learn.microsoft.com/en-us/entra/msidweb/agent-id-sdk/overview). In fact, for container environments, this SDK is intended to run as a sidecar / helper. The sidecar exposes an HTTP service (default http://localhost:5000/) and some endpoints to help automate the token exchanges. 
 
-<<image here>>
+![Sidecar exchange tokens](./images/sidecar-1.png)
 
 That way, the client agent / application can call these `localhost` services regardless of what language/framework they used. 
 
@@ -57,7 +57,7 @@ data:
   ASPNETCORE_URLS: "http://+:5000"
 ```
 
-Here we set up the access to the blueprint and the Graph APIs. Note, that we are going to use the blueprint's client secret from the previous post (Part Two). Note that this is not a production-ready configuration. In the next post (Part Four) we will use [workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) to eliminate the client secret. But for now, we'll use it to try out the sidecar. 
+Here we set up the access to the blueprint and the Graph APIs. Note, that we are going to use the blueprint's client secret from the previous post (Part Two). **Note that this is not a production-ready configuration**. In the next post (Part Four) we will use [workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation) to eliminate the client secret. But for now, we'll use it to try out the sidecar. 
 
 
 Next, let's look at the deployment:
@@ -99,7 +99,7 @@ spec:
             name: sidecar-secret
 ```
 
-Here we see a Kubernetes deployment that configures two containers: `app` and `sidecar`. There are a few pre-built docker images for the sidecar, and I'm using `auth-sidecar:1.0.0-azurelinux3.0-distroless` running on Linux/Mac. The sidecar loads the configuration (and client secret) from a configmap and secret. In the [project repo](https://github.com/christian-posta/entra-agent-id-agw), you will find a `env.example` and `deploy.sh` file that take care of deploying this and substituting the variables from `.env`. If you are unsure what the right values are, in our previous sessions, our powershell should still have the right values:
+Here we see a Kubernetes deployment that configures two containers: `app` and `sidecar`. There are a few pre-built docker images for the sidecar, and I'm using `auth-sidecar:1.0.0-azurelinux3.0-distroless` running on Linux/Mac. The sidecar loads the configuration (and client secret) from a configmap and secret. In the `./kubernetes` folder of the [project repo](https://github.com/christian-posta/entra-agent-id-agw), you will find a `env.example` and `deploy.sh` file that take care of deploying this and substituting the variables from `.env`. If you are unsure what the right values are, in our previous sessions, our powershell should still have the right values:
 
 ```powershell
 Write-Host $tenantId          
@@ -115,7 +115,7 @@ TENANT_ID=
 CLIENT_SECRET=
 ```
 
-We are going to run this example on a Kind cluster, but pick your favorite distro. 
+We are going to run this example on a Kind cluster just to be cloud agnostic, but pick your favorite distro. The mechanism is the same for all AKS/EKS/GKE and OpenShift. Though, in OpenShift, you may have to tweak the runtime platform permissions (SCC, etc)
 
 
 ```bash
@@ -174,6 +174,7 @@ The sidecar can also help with Agent OBO tokens. Assuming the agent can acquire 
 # Do the Agent OBO flow. Note, there is a bug in the sidecar, we need this to get fixed:
 # https://github.com/AzureAD/microsoft-identity-web/issues/3643
 # We could build our own custom docker image to do this. 
+
 #from your desktop or powershell:
 source ./kubernetes/client-secret/.env
 az logout
@@ -188,10 +189,9 @@ kubectl exec -it deploy/demo-app -n entra-demo -c app -- \
 The sidecar gets us on a road that allows us to use this in production, but there are still a number of unclear things at this point:
 
 * We don't want to use blueprint client secrets in our configuration 
-* We are hardcoding a lot of things (ie, where does agent identity come from?)
 * Do you use a single blueprint config for everything? 
 * How do you map the blueprints to Kubernetes pods? 
 * How do you map agent identities? 
 * How do they get created?
 
-Like I've said earlier, if you're running Azure, you have a lot of this sorted for you. If you're trying to make Entra Agent ID useful across other platforms (maybe your own Kubernetes), then we need to have some supporting pieces. 
+We will try to answer some of this in the next section (Part Four). 
