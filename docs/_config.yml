@@ -15,6 +15,10 @@ github: [metadata]
 github_username: christian-posta
 github_repository: entra-agent-id-agw
 
+# Google Analytics
+# Replace with your Google Analytics tracking ID (e.g., G-XXXXXXXXXX for GA4 or UA-XXXXXXXXX-X for Universal Analytics)
+google_analytics: # Add your tracking ID here
+
 # Exclude files that shouldn't be processed
 exclude:
   - Gemfile
