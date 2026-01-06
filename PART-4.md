@@ -1,16 +1,20 @@
 # Microsoft Entra Agent ID on Kubernetes
 
-This is part of a multi-part series where we dig into how Microsoft Entra Agent ID gives an option for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes for Agent and MCP workloads outside of Azure. Azure has managed identities but they work within the Azure ecosystem, but if we want to expand past that, we need to understand how Agent ID works. If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
+This is part of a multi-part series where we dig into how Microsoft Entra Agent ID works for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes (not necessarily AKS, but would apply there too) for Agent and MCP workloads.  If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
 
 # Part Four: Workload Identity Federation
 
-In the previous post, we saw how to use the [microsoft-web-identity](https://github.com/AzureAD/microsoft-identity-web) sidecar to shield the agent app from doing complex token exchanges and dealing with blueprint's sensitive tokens. But we still had to configure client credentials for the blueprint to get its access tokens. We should never use client credentials in a production environment ([or API keys](https://blog.christianposta.com/api-keys-are-a-bad-idea-for-enterprise-llm-agent-and-mcp-access/)!). Instead of client credentials, let's configure [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation). This allows us to use a trusted token already baked into the platform (ie, like a Kubrenetes service-account token) and have Entra trust that. That allows us to get rid of the client credential and seamlessly integrate the Kubernetes workloads / service accounts with an Agent Blueprint. This solves some of the problems from the previous post (Post Three) but not all. We will still need some automation to smooth over the other rough edges.
+In the previous post, we saw how to use the [microsoft-web-identity](https://github.com/AzureAD/microsoft-identity-web) sidecar to shield the agent app from doing complex token exchanges and dealing with blueprint's sensitive tokens. But we still had to configure client credentials for the blueprint to get its access tokens. We should **never use client credentials in a production environment** ([or API keys](https://blog.christianposta.com/api-keys-are-a-bad-idea-for-enterprise-llm-agent-and-mcp-access/)!). 
 
-Let's see how to set up workload identity federation for our `microsoft-web-identity` sidecar. 
+Instead of client credentials, let's configure [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation). This allows us to use a trusted token already baked into the platform (ie, like a Kubrenetes service-account token) and have Entra trust that. That allows us to get rid of the client credential config/envvar stuff and seamlessly integrate the Kubernetes workloads / service accounts with an Agent Blueprint. This solves some of the problems from the previous post (Post Three) but not all. 
+
+Let's see how to set up workload identity federation for our `microsoft-web-identity` sidecar. We will use Kind kubernetes to stay cloud agnostic in the examples, but the pattern applies to any *KS you are interested in. 
 
 ## Configuring Workload Identity Federation for Agent Blueprint
 
-This post walks through configuring workload identity federation to eliminate client secrets when using the Entra SDK sidecar with Agent Blueprints on a local Kind Kubernetes cluster. Instead of storing a client secret in Kubernetes, workload identity federation allows the sidecar to authenticate using a Kubernetes service account token. Entra ID trusts tokens signed by your cluster's service account issuer.
+This post walks through configuring workload identity federation for a Kind cluster to eliminate client secrets when using the Entra SDK sidecar with Agent Blueprints on a local Kind Kubernetes cluster. Instead of storing a client secret in Kubernetes, workload identity federation allows the sidecar to authenticate using a Kubernetes service account token. Entra ID trusts tokens signed by your cluster's service account issuer.
+
+Some of the steps are specific to Kind and can be skipped if using a AKS/GKE/EKS cluster. 
 
 ### Architecture
 
@@ -33,16 +37,22 @@ Kind Cluster                              Entra ID
 └──────────────────────┘
 ```
 
-### Why Self-Hosted OIDC?
+### Kind + OIDC?
 
 Kind clusters don't expose their OIDC endpoints publicly by default. Entra ID needs to:
+
 1. Fetch the OIDC discovery document to find the JWKS URL
 2. Fetch the JWKS to verify the service account token's signature
 
-We solve this by hosting the OIDC discovery document and JWKS on Azure Blob Storage.
+We solve this by hosting the OIDC discovery document and JWKS on Azure Blob Storage. If using a cloud provider's Kubernetes service, refer to their documentation for getting the JWKS from a cluster. 
 
+* [Azure / AKS](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview?tabs=dotnet)
+* [Google / GKE](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-kubernetes)
+* [AWS / EKS](https://docs.aws.amazon.com/eks/latest/userguide/enable-iam-roles-for-service-accounts.html)
 
-### Prerequisites
+The rest of this guide will use Kind.
+
+### Prerequisites for Kind
 
 ```bash
 # Required tools
@@ -441,4 +451,4 @@ Additionally:
 * An AI agent may need to call out to MCP tools. Those aren't agents. How do we enforce policy based on user/agent identity?
 * How do we get any observability here? How do we know what's being called?
 
-So far we've been exploring this through a very simplistic app (sleep/curl). But what if we have a more powerful AI agent deployed in the container? And we want to call out to MCP tools? Let's look at what a more realistic app looks like and then we can see how to alleviate the aforementioned problems. 
+So far we've been exploring this through a very simplistic app (sleep/curl). But what if we have a more powerful AI agent deployed in the container? And we want to call out to MCP tools? Let's look at what a more realistic app looks like and then we can see how to alleviate the aforementioned problems in Part Five. 
