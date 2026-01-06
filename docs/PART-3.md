@@ -4,6 +4,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Three: Running on Kubernetes
 
+[← Back to Series](index.md)
+
 > **Source Code**: This part covers deploying the Entra SDK sidecar on Kubernetes. The complete Kubernetes deployment configurations, including sidecar setup, can be found in the [`kubernetes/`](https://github.com/christian-posta/entra-agent-id-agw) directory in the [repository](https://github.com/christian-posta/entra-agent-id-agw). For examples using client secrets (not recommended for production), see `kubernetes/client-secret/`.
 
 In the previous two parts of this series, we looked at the details of setting up Agent Identity Blueprints, creating Agent Identities, and what the full token exchange looks like. This is important to understand what happens behind the scenes. But to be honest, there is a lot of machinery that needs to happen for this to work, right? 

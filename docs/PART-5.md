@@ -4,6 +4,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Five: LLM and MCP with Entra Agent ID and AgentGateway
 
+[← Back to Series](index.md)
+
 > **Source Code**: This part covers a complete working example. The full AI Agent CLI application, including Azure OpenAI integration, MCP server connectivity, and AgentGateway configuration, can be found in the [`ai-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) directory in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
 
 So far, we've seen Entra Agent ID in detail, how to run it on Kubernetes, and how to use workload identity federation. In this last part, we'll walk through a full working example of an AI agent that uses Microsoft Entra and Agent ID to communicate/Auth with an Azure OpenAI LLM and a custom MCP server. We'll use OBO flow to call the MCP server on behalf of the user and we'll mediate all of this traffic with [AgentGateway](https://agentgateway.dev) which is an LLM and MCP gateawy. 
@@ -228,6 +230,6 @@ This has been a deep dive of Entra Agent ID. If you're running on Kubernetes and
 
 ---
 
-**Previous:** [Part Four: Workload Identity Federation](PART-4.md) | [Back to Index](index.md)
+**Previous:** [Part Four: Workload Identity Federation](PART-4.md) | [Back to Series](index.md)
 
  

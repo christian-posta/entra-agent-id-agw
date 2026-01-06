@@ -5,6 +5,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Two: Agent On-Behalf-Of User
 
+[← Back to Series](index.md)
+
 > **Source Code**: This part covers OBO token exchange mechanisms. For working examples of OBO flows, see the [`entra-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) and [`ai-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
 
 Microsoft Entra Agent ID is an extension to Entra that adds agent identity as a first class citizen. In the previous section, we saw the mechanism for how this works:

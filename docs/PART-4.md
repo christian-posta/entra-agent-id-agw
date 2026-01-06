@@ -4,6 +4,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part Four: Workload Identity Federation
 
+[← Back to Series](index.md)
+
 > **Source Code**: This part covers workload identity federation setup. The Kubernetes configurations for workload identity federation can be found in the [`kubernetes/`](https://github.com/christian-posta/entra-agent-id-agw) and [`workload-id-kind/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
 
 In the previous post, we saw how to use the [microsoft-web-identity](https://github.com/AzureAD/microsoft-identity-web) sidecar to shield the agent app from doing complex token exchanges and dealing with blueprint's sensitive tokens. But we still had to configure client credentials for the blueprint to get its access tokens. We should **never use client credentials in a production environment** ([or API keys](https://blog.christianposta.com/api-keys-are-a-bad-idea-for-enterprise-llm-agent-and-mcp-access/)!). 

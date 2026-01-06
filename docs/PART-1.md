@@ -6,6 +6,8 @@ This is part of a multi-part series where we dig into how Microsoft Entra Agent 
 
 # Part One: Understanding Entra Agent ID
 
+[← Back to Series](index.md)
+
 > **Source Code**: This part covers the conceptual foundations of Entra Agent ID. For implementation examples, see the [`entra-agent-cli/`](https://github.com/christian-posta/entra-agent-id-agw) and [`kubernetes/`](https://github.com/christian-posta/entra-agent-id-agw) directories in the [repository](https://github.com/christian-posta/entra-agent-id-agw).
 
 Entra Agent ID builds on existing Entra capabilities around User and Service Account identity and policy and extends to natively support AI agents. To understand Entra Agent ID better, we need a little understanding about how Entra works today. 
