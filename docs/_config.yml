@@ -1,5 +1,7 @@
 title: Microsoft Entra Agent ID on Kubernetes
 description: A comprehensive guide to setting up Microsoft Entra Agent ID on Kubernetes
+baseurl: "/entra-agent-id-agw"
+url: "https://blog.christianposta.com"
 theme: jekyll-theme-cayman
 plugins:
   - jekyll-relative-links
