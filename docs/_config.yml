@@ -1,0 +1,25 @@
+title: Microsoft Entra Agent ID on Kubernetes
+description: A comprehensive guide to setting up Microsoft Entra Agent ID on Kubernetes
+theme: jekyll-theme-minimal
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: true
+
+# Exclude files that shouldn't be processed
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - .venv
+  - __pycache__
+  - "*.ps1"
+  - .env
+  - "*.key"
+  - ai-agent-cli
+  - entra-agent-cli
+  - kubernetes
+  - workload-id-kind
+  - demo
