@@ -1,6 +1,6 @@
 # Microsoft Entra Agent ID on Kubernetes
 
-This is part of a multi-part series where we dig into how Microsoft Entra Agent ID gives an option for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes for Agent and MCP workloads outside of Azure. Azure has managed identities but they work within the Azure ecosystem, but if we want to expand past that, we need to understand how Agent ID works. If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
+This is part of a multi-part series where we dig into how Microsoft Entra Agent ID works for agent identity. This set of guides will specifically dive deeply into how it works (it's full token-exchange mechanism) with the goal of getting it working on Kubernetes (not necessarily AKS, but would apply there too) for Agent and MCP workloads.  If you're interested in this, please follow me [/in/ceposta](https://www.linkedin.com/in/ceposta) for updates!
 
 
 # Part Two: Agent On-Behalf-Of User
@@ -66,7 +66,6 @@ In this section, we'll look at what's needed to enable Agent "on behalf of" so t
 
 ![Blueprint impersonation token exchange](./images/agent-obo-exchange.png)
 
-Just to point out clearly, this part is intended to help you understand the mechanism behind the scenes to get the right token. I am making no value judgements about whether this is good or even the right way to do in Kubernetes. We will address that as we go in the future parts. 
 
 ### Prerequisites
 
@@ -74,7 +73,7 @@ Before we are able to do an On Behalf Of exchage, we need to make some modificat
 
 In the classic [service-to-service OBO exchange](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-on-behalf-of-flow), the service can only do the exchange if the `aud` of the token correctly matches its own `client_id`. The Microsoft Entra STS will reject the token exchange request if this is not the case. The same will be true for blueprint and AI agents identities. So the user will need to make its token request for the API/scope represented on the blueprint. When we created the blueprint, we did not specify an APIs or scopes, so the pre-requisite is to set this up.
 
-This part will require us to use the Graph Beta API. In our powershell session, we'll need to make sure the Beta API is available:
+This part will require us to use the Graph _Beta_ API. In our powershell session, we'll need to make sure the Beta API is available:
 
 ```powershell
 # Install the beta module if not already installed
@@ -94,7 +93,7 @@ Connect-MgGraph -Scopes @(
 )
 ```
 
-Let's set up the app URL first. Note this uses the `Update-MgBetaApplication` command which is a Beta module. See earlier steps for setting that up. 
+Let's set up the **app URL** first. Note this uses the `Update-MgBetaApplication` command which is a Beta module. See earlier steps for setting that up. 
 
 ```powershell
 # Your Blueprint's Client ID
@@ -121,7 +120,7 @@ You should see something like this:
 ✅ Set App ID URI to: api://85075aa5-1d73-42de-812a-95348218e4b2
 ```
 
-Now we need to add an a "[delegated permission](https://learn.microsoft.com/en-us/entra/identity-platform/delegated-access-primer)" to the blueprint so that clients can reques them in their scopes. 
+Now we need to add an a "[delegated permission](https://learn.microsoft.com/en-us/entra/identity-platform/delegated-access-primer)" to the blueprint so that clients can request them in their scopes. 
 
 ```powershell
 # Step 2b: Add the 'access_as_user' scope
@@ -156,7 +155,7 @@ You should see something like this:
 Full scope: api://85075aa5-1d73-42de-812a-95348218e4b2/access_as_user
 ```
 
-Now that the blueprint is set up to allow users to request the `access_as_user` scope on the `api://85075aa5-1d73-42de-812a-95348218e4b2` API, we can tweak the previous (Part One) steps to include the user's token (Tc). 
+Now that the blueprint is set up to allow users to request the `access_as_user` scope on the `api://85075aa5-1d73-42de-812a-95348218e4b2` API, we can tweak the previous (Part One) steps to request the right scopes for the user toekn (Tc). 
 
 When the user logs in, they need to request the `api://85075aa5-1d73-42de-812a-95348218e4b2/access_as_user` scope:
 
