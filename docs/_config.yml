@@ -1,11 +1,17 @@
 title: Microsoft Entra Agent ID on Kubernetes
 description: A comprehensive guide to setting up Microsoft Entra Agent ID on Kubernetes
-theme: jekyll-theme-minimal
+theme: jekyll-theme-cayman
 plugins:
   - jekyll-relative-links
 relative_links:
   enabled: true
   collections: true
+
+# Theme customization
+show_downloads: false
+github: [metadata]
+github_username: christian-posta
+github_repository: entra-agent-id-agw
 
 # Exclude files that shouldn't be processed
 exclude:
