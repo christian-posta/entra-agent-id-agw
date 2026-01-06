@@ -1,81 +1,57 @@
-# Creating Agent Identity for Kubernetes
+# Microsoft Entra Agent ID on Kubernetes
 
-Before we do anything, we need to configure a client that can create an Agent Identity Blueprint. Once we have that, we can create as many Blueprints as we want.  
+This repository contains comprehensive guides and examples for setting up [Microsoft Entra Agent ID](https://learn.microsoft.com/en-us/entra/agent-id/identity-platform/) on Kubernetes. Entra Agent ID is a new feature that adds first-class support for AI Agent workloads, providing strong agent identity and the ability for agents to act on behalf of users (delegation) with proper audit trails.
 
-See [creating a blueprint](./BLUEPRINT-CREATION-POWERSHELL.md)
+## 📚 Documentation
 
+**👉 [Read the full documentation on GitHub Pages →](https://blog.christianposta.com/entra-agent-id-agw/)**
 
+The documentation includes a comprehensive 5-part series covering:
+- Understanding Entra Agent ID fundamentals
+- Agent On-Behalf-Of (OBO) token exchange mechanisms
+- Running Entra Agent ID on Kubernetes with the SDK sidecar
+- Workload Identity Federation to eliminate client secrets
+- Full working examples with LLMs, MCP servers, and AgentGateway
 
-## Set up powershell
-```bash
-brew install powershell/tap/powershell
-```
-```bash
-pwsh
-```
+## What's Included
 
-```bash
-# Install the Microsoft Graph module (this may take a few minutes)
-Install-Module Microsoft.Graph -Scope CurrentUser -Repository PSGallery -Force
-```
+- **Multi-part guide series** - Deep dive into how Entra Agent ID works
+- **Kubernetes deployment examples** - Ready-to-use configurations for deploying to Kubernetes
+- **AI Agent CLI demo** - Full working example application with Azure OpenAI and MCP integration using [AgentGateway](https://agentgateway.dev)
+- **Setup guides** - PowerShell and programmatic blueprint creation
+- **Reference documentation** - Detailed technical references
 
-```bash
-# Connect with more priv
-Connect-MgGraph -Scopes "RoleManagement.ReadWrite.Directory","Directory.ReadWrite.All","AgentIdentityBlueprint.ReadWrite.All"
+## Quick Start
 
+### Prerequisites
 
-# Check that you're connected and have the right permissions
-Get-MgContext
+Before you begin, you'll need to create an Agent Identity Blueprint. See the [Blueprint Creation Guide](./BLUEPRINT-CREATION-POWERSHELL.md) for details.
 
-# Get your user ID
-$me = Get-MgUser -UserId "christian.posta@solo.io"
-$myUserId = $me.Id
-Write-Host "Your User ID: $myUserId"
-
-```
-
-# Deploy to Kubernetes
-
-Copy env.example to .env (and fill in proper variables)
-Then go deploy to k8s with envsub:
+### Deploy to Kubernetes
 
 ```bash
 cp env.example .env
+# Edit .env with your configuration
 cd kubernetes
 ./deploy.sh
 ```
 
-## Quick Scripts
+## Repository Structure
 
-Get my user token with scopes for blueprint:
+- `PART-*.md` - Multi-part guide series (also available on [GitHub Pages](https://blog.christianposta.com/entra-agent-id-agw/))
+- `ai-agent-cli/` - Full working example application
+- `kubernetes/` - Kubernetes deployment configurations
+- `reference/` - Technical reference documentation
+- `docs/` - GitHub Pages site configuration
 
-```bash
-BLUEPRINT_CLIENT_ID=<id-here>
-az logout
-az login --tenant "5e7d8166-7876-4755-a1a4-b476d4a344f6" --scope "api://$BLUEPRINT_CLIENT_ID/access_as_user"
-TOKEN=$(az account get-access-token --resource "api://$BLUEPRINT_CLIENT_ID" --query accessToken -o tsv)
-echo $TOKEN
-```
+## Related Projects
 
+- **[AgentGateway](https://agentgateway.dev)** - LLM and MCP gateway used in the AI Agent CLI demo for network and policy control
 
-## Digging into Roles
+## Stay Updated
 
-List all Azure RBAC Providers:
+For updates and more content on Entra Agent ID, Kubernetes, and AI agents, follow me on [LinkedIn](https://www.linkedin.com/in/ceposta).
 
-```bash
-# List all Azure providers
-az provider list --output table
+## License
 
-
-# List all "operations" on a specific provider / show data operations:
-az provider operation list \
-  --query "[?name=='Microsoft.Storage'].resourceTypes[].operations[].{Name:name, IsDataAction:isDataAction, Description:description}" \
-  --output table
-
-
-# List all "app roles" for Graph
-az rest --method GET \
-  --url "https://graph.microsoft.com/v1.0/servicePrincipals?\$filter=appId eq '00000003-0000-0000-c000-000000000000'" \
-  --query "value[0].appRoles[].{Value:value, DisplayName:displayName}" \
-  --output table
-```
+This repository contains guides and examples. Please refer to Microsoft's documentation for official Entra Agent ID licensing and terms.
