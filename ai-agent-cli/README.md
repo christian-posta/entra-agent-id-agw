@@ -449,7 +449,7 @@ From the interactive menu, select option 3:
 
 ```
 Server name: my-mcp-server
-SSE URL: http://localhost:3000/sse
+MCP URL: http://localhost:3000/mcp
 
 Connecting to my-mcp-server...
 ✓ MCP server 'my-mcp-server' added and connected!
