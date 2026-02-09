@@ -5,6 +5,8 @@ url: "https://blog.christianposta.com"
 theme: jekyll-theme-cayman
 plugins:
   - jekyll-relative-links
+  - jekyll-sitemap
+  - jekyll-seo-tag
 relative_links:
   enabled: true
   collections: true
